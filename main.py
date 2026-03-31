@@ -112,6 +112,61 @@ def build_calibration_prompts(obs_velocities, obs_curvatures):
     ]
 
 
+def load_scene_sequence(nusc, scene, args):
+    token = scene["token"]
+    first_sample_token = scene["first_sample_token"]
+    last_sample_token = scene["last_sample_token"]
+    name = scene["name"]
+
+    front_camera_images = []
+    ego_poses = []
+    camera_params = []
+    curr_sample_token = first_sample_token
+    while True:
+        sample = nusc.get("sample", curr_sample_token)
+        cam_front_data = nusc.get("sample_data", sample["data"]["CAM_FRONT"])
+        image_path = os.path.join(nusc.dataroot, cam_front_data["filename"])
+
+        if "gpt" in args.model_path:
+            with open(image_path, "rb") as image_file:
+                front_camera_images.append(base64.b64encode(image_file.read()).decode("utf-8"))
+        else:
+            front_camera_images.append(image_path)
+
+        ego_poses.append(nusc.get("ego_pose", cam_front_data["ego_pose_token"]))
+        camera_params.append(nusc.get("calibrated_sensor", cam_front_data["calibrated_sensor_token"]))
+
+        if curr_sample_token == last_sample_token:
+            break
+        curr_sample_token = sample["next"]
+
+    return token, name, front_camera_images, ego_poses, camera_params
+
+
+def compute_scene_motion_features(ego_poses):
+    scene_length = len(ego_poses)
+    ego_poses_world = np.array([ego_pose["translation"][:3] for ego_pose in ego_poses])
+
+    ego_velocities = np.zeros_like(ego_poses_world)
+    if scene_length > 1:
+        ego_velocities[1:] = ego_poses_world[1:] - ego_poses_world[:-1]
+        ego_velocities[0] = ego_velocities[1]
+
+    ego_curvatures = EstimateCurvatureFromTrajectory(ego_poses_world)
+    ego_velocities_norm = np.linalg.norm(ego_velocities, axis=1)
+    initial_heading = atan2(ego_velocities[0][1], ego_velocities[0][0]) if scene_length > 0 else 0.0
+    estimated_points = IntegrateCurvatureForPoints(
+        ego_curvatures,
+        ego_velocities_norm,
+        ego_poses_world[0],
+        initial_heading,
+        scene_length,
+    )
+    ego_traj_world = [ego_pose["translation"][:3] for ego_pose in ego_poses]
+
+    return scene_length, ego_poses_world, ego_velocities, ego_curvatures, estimated_points, ego_traj_world
+
+
 def getMessage(prompt, image=None, args=None):
     if "llama" in args.model_path or "Llama" in args.model_path:
         return [
@@ -685,55 +740,52 @@ def main():
     scenes = nusc.scene
     print(f"Number of scenes: {len(scenes)}")
 
-    for scene in scenes:
-        token = scene["token"]
-        first_sample_token = scene["first_sample_token"]
-        last_sample_token = scene["last_sample_token"]
-        name = scene["name"]
+    if calibration_state and not calibration_state["completed"]:
+        print("Running offline QuantAct calibration pass before full evaluation.")
+        for scene in scenes:
+            _, name, front_camera_images, ego_poses, _ = load_scene_sequence(nusc, scene, args)
+            scene_length = len(front_camera_images)
 
-        front_camera_images = []
-        ego_poses = []
-        camera_params = []
-        curr_sample_token = first_sample_token
-        while True:
-            sample = nusc.get("sample", curr_sample_token)
-            cam_front_data = nusc.get("sample_data", sample["data"]["CAM_FRONT"])
+            print(f"Calibration scene {name} has {scene_length} frames")
+            if scene_length < TTL_LEN:
+                print(f"Calibration scene {name} has less than {TTL_LEN} frames, skipping...")
+                continue
 
-            if "gpt" in args.model_path:
-                with open(os.path.join(nusc.dataroot, cam_front_data["filename"]), "rb") as image_file:
-                    front_camera_images.append(base64.b64encode(image_file.read()).decode("utf-8"))
-            else:
-                front_camera_images.append(os.path.join(nusc.dataroot, cam_front_data["filename"]))
+            _, _, ego_velocities, ego_curvatures, _, _ = compute_scene_motion_features(ego_poses)
 
-            ego_poses.append(nusc.get("ego_pose", cam_front_data["ego_pose_token"]))
-            camera_params.append(nusc.get("calibrated_sensor", cam_front_data["calibrated_sensor_token"]))
-
-            if curr_sample_token == last_sample_token:
+            run_scene_quant_calibration(
+                name,
+                front_camera_images,
+                ego_velocities,
+                ego_curvatures,
+                processor,
+                model,
+                tokenizer,
+                args,
+                calibration_state,
+            )
+            if calibration_state["completed"]:
                 break
-            curr_sample_token = sample["next"]
 
+        if not calibration_state["completed"]:
+            calibration_state["error"] = (
+                "Calibration dataset was exhausted before reaching the requested "
+                "number of calibration/search samples."
+            )
+            finish_quant_calibration(model, calibration_state, status="partial")
+
+    for scene in scenes:
+        token, name, front_camera_images, ego_poses, camera_params = load_scene_sequence(nusc, scene, args)
         scene_length = len(front_camera_images)
+
         print(f"Scene {name} has {scene_length} frames")
         if scene_length < TTL_LEN:
             print(f"Scene {name} has less than {TTL_LEN} frames, skipping...")
             continue
 
-        ego_poses_world = np.array([ego_poses[t]["translation"][:3] for t in range(scene_length)])
+        scene_length, ego_poses_world, ego_velocities, ego_curvatures, estimated_points, ego_traj_world = compute_scene_motion_features(ego_poses)
+
         plt.plot(ego_poses_world[:, 0], ego_poses_world[:, 1], "r-", label="GT")
-
-        ego_velocities = np.zeros_like(ego_poses_world)
-        ego_velocities[1:] = ego_poses_world[1:] - ego_poses_world[:-1]
-        ego_velocities[0] = ego_velocities[1]
-
-        ego_curvatures = EstimateCurvatureFromTrajectory(ego_poses_world)
-        ego_velocities_norm = np.linalg.norm(ego_velocities, axis=1)
-        estimated_points = IntegrateCurvatureForPoints(
-            ego_curvatures,
-            ego_velocities_norm,
-            ego_poses_world[0],
-            atan2(ego_velocities[0][1], ego_velocities[0][0]),
-            scene_length,
-        )
 
         if args.plot:
             plt.quiver(
@@ -747,21 +799,6 @@ def main():
             plt.legend()
             plt.savefig(f"{timestamp}/{name}_interpolation.jpg")
             plt.close()
-
-        ego_traj_world = [ego_poses[t]["translation"][:3] for t in range(scene_length)]
-
-        if calibration_state and not calibration_state["completed"]:
-            run_scene_quant_calibration(
-                name,
-                front_camera_images,
-                ego_velocities,
-                ego_curvatures,
-                processor,
-                model,
-                tokenizer,
-                args,
-                calibration_state,
-            )
 
         prev_intent = None
         cam_images_sequence = []
@@ -893,13 +930,6 @@ def main():
 
         if args.plot and cam_images_sequence:
             WriteImageSequenceToVideo(cam_images_sequence, f"{timestamp}/{name}")
-
-    if calibration_state and not calibration_state["completed"]:
-        calibration_state["error"] = (
-            "Calibration dataset was exhausted before reaching the requested "
-            "number of calibration/search samples."
-        )
-        finish_quant_calibration(model, calibration_state, status="partial")
 
 
 if __name__ == "__main__":
