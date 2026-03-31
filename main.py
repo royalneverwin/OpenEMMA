@@ -18,7 +18,6 @@ from transformers import (
     AutoProcessor,
     MllamaForConditionalGeneration,
     Qwen2VLForConditionalGeneration,
-    Qwen2_5_VLForConditionalGeneration,
 )
 
 from llava.constants import (
