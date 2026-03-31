@@ -21,6 +21,152 @@ DYNAMIC_ALPHA="${DYNAMIC_ALPHA:-0}"
 QUANT_METHOD="${QUANT_METHOD:-quant_error_group}"
 PRUNING_METHOD="${PRUNING_METHOD:-cdpruner}"
 
+PASSTHROUGH_ARGS=()
+
+usage() {
+  cat <<EOF
+Usage:
+  $(basename "$0") [options] [-- extra-cli-args]
+
+Examples:
+  $(basename "$0") \\
+    --image-file assets/scene-0103.jpg \\
+    --visual-token-num 128 \\
+    --quant-method quant_error_group \\
+    --pruning-method cdpruner
+
+Options:
+  --python-bin PATH
+  --model-path VALUE
+  --image-file PATH
+  --conv-mode VALUE
+  --load-4bit / --no-load-4bit
+  --load-8bit / --no-load-8bit
+  --use-qvlm-custom-bnb / --no-use-qvlm-custom-bnb
+  --custom-bnb-path PATH
+  --visual-token-num VALUE
+  --add-quant / --no-add-quant
+  --alpha VALUE
+  --dynamic-alpha / --no-dynamic-alpha
+  --quant-method VALUE
+  --pruning-method VALUE
+  -h, --help
+EOF
+}
+
+require_value() {
+  local option_name="$1"
+  local option_value="${2:-}"
+  if [[ -z "$option_value" ]]; then
+    echo "Missing value for $option_name" >&2
+    exit 1
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --python-bin)
+      require_value "$1" "${2:-}"
+      PYTHON_BIN="$2"
+      shift 2
+      ;;
+    --model-path)
+      require_value "$1" "${2:-}"
+      MODEL_PATH="$2"
+      shift 2
+      ;;
+    --image-file)
+      require_value "$1" "${2:-}"
+      IMAGE_FILE="$2"
+      shift 2
+      ;;
+    --conv-mode)
+      require_value "$1" "${2:-}"
+      CONV_MODE="$2"
+      shift 2
+      ;;
+    --load-4bit)
+      LOAD_4BIT=1
+      shift
+      ;;
+    --no-load-4bit)
+      LOAD_4BIT=0
+      shift
+      ;;
+    --load-8bit)
+      LOAD_8BIT=1
+      shift
+      ;;
+    --no-load-8bit)
+      LOAD_8BIT=0
+      shift
+      ;;
+    --use-qvlm-custom-bnb)
+      USE_QVLM_CUSTOM_BNB=1
+      shift
+      ;;
+    --no-use-qvlm-custom-bnb)
+      USE_QVLM_CUSTOM_BNB=0
+      shift
+      ;;
+    --custom-bnb-path)
+      require_value "$1" "${2:-}"
+      CUSTOM_BNB_PATH="$2"
+      shift 2
+      ;;
+    --visual-token-num)
+      require_value "$1" "${2:-}"
+      VISUAL_TOKEN_NUM="$2"
+      shift 2
+      ;;
+    --add-quant)
+      ADD_QUANT=1
+      shift
+      ;;
+    --no-add-quant)
+      ADD_QUANT=0
+      shift
+      ;;
+    --alpha)
+      require_value "$1" "${2:-}"
+      ALPHA="$2"
+      shift 2
+      ;;
+    --dynamic-alpha)
+      DYNAMIC_ALPHA=1
+      shift
+      ;;
+    --no-dynamic-alpha)
+      DYNAMIC_ALPHA=0
+      shift
+      ;;
+    --quant-method)
+      require_value "$1" "${2:-}"
+      QUANT_METHOD="$2"
+      shift 2
+      ;;
+    --pruning-method)
+      require_value "$1" "${2:-}"
+      PRUNING_METHOD="$2"
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      PASSTHROUGH_ARGS+=("$@")
+      break
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      echo "Run with --help to see supported options." >&2
+      exit 1
+      ;;
+  esac
+done
+
 export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 CMD=(
@@ -53,6 +199,10 @@ fi
 
 if [[ "$DYNAMIC_ALPHA" == "1" ]]; then
   CMD+=(--dynamic-alpha)
+fi
+
+if [[ ${#PASSTHROUGH_ARGS[@]} -gt 0 ]]; then
+  CMD+=("${PASSTHROUGH_ARGS[@]}")
 fi
 
 printf 'Running command:\n%s\n' "${CMD[*]}"

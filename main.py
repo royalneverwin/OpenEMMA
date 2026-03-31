@@ -46,7 +46,6 @@ client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", "[your-openai-api-key]"
 OBS_LEN = 10
 FUT_LEN = 10
 TTL_LEN = OBS_LEN + FUT_LEN
-DEFAULT_SCENE_NAMES = ("scene-0103", "scene-1077")
 
 
 def str2bool(value):
@@ -58,24 +57,6 @@ def str2bool(value):
     if value in {"false", "0", "no", "n"}:
         return False
     raise argparse.ArgumentTypeError(f"Expected a boolean value, got `{value}`.")
-
-
-def parse_name_list(raw_value):
-    if raw_value is None:
-        return []
-    if isinstance(raw_value, (list, tuple, set)):
-        return [str(item).strip() for item in raw_value if str(item).strip()]
-    return [item.strip() for item in str(raw_value).split(",") if item.strip()]
-
-
-def resolve_scene_name_filter(raw_value, default_values=()):
-    parsed_names = parse_name_list(raw_value)
-    if parsed_names:
-        return set(parsed_names)
-    if default_values:
-        return set(default_values)
-    return None
-
 
 def get_model_device(model):
     if hasattr(model, "device") and model.device is not None:
@@ -269,7 +250,6 @@ def save_calibration_summary(state):
         "search_target": state["search_target"],
         "calibrate_done": state["calibrate_done"],
         "search_done": state["search_done"],
-        "scene_name_filter": sorted(state["scene_name_filter"]) if state["scene_name_filter"] else None,
         "started_at": state["started_at"],
         "ended_at": state.get("ended_at"),
         "error": state.get("error"),
@@ -288,7 +268,7 @@ def finish_quant_calibration(model, state, status):
     save_calibration_summary(state)
 
 
-def initialize_quant_calibration(model, args, summary_path, scene_name_filter=None):
+def initialize_quant_calibration(model, args, summary_path):
     if model is None or "llava" not in args.model_path or not args.run_calibration:
         return None
 
@@ -302,7 +282,6 @@ def initialize_quant_calibration(model, args, summary_path, scene_name_filter=No
         "calibrate_done": 0,
         "search_done": 0,
         "prompt_index": 0,
-        "scene_name_filter": scene_name_filter,
         "summary_path": summary_path,
         "started_at": datetime.now().isoformat(),
     }
@@ -351,8 +330,6 @@ def run_scene_quant_calibration(
     state,
 ):
     if state is None or state["completed"]:
-        return
-    if state["scene_name_filter"] and scene_name not in state["scene_name_filter"]:
         return
 
     total_windows = max(0, len(front_camera_images) - OBS_LEN + 1)
@@ -673,7 +650,6 @@ def main():
     parser.add_argument("--dataroot", type=str, default="datasets/NuScenes")
     parser.add_argument("--version", type=str, default="v1.0-mini")
     parser.add_argument("--method", type=str, default="openemma")
-    parser.add_argument("--scene-names", type=str, default="scene-0103,scene-1077")
     parser.add_argument("--load-8bit", action="store_true")
     parser.add_argument("--load-4bit", action="store_true")
     parser.add_argument("--use-qvlm-custom-bnb", action="store_true")
@@ -689,7 +665,6 @@ def main():
     parser.add_argument("--calibration-samples", type=int, default=8)
     parser.add_argument("--calibration-search-samples", type=int, default=2)
     parser.add_argument("--calibration-max-new-tokens", type=int, default=32)
-    parser.add_argument("--calibration-scene-names", type=str, default=None)
     args = parser.parse_args()
 
     print(args.model_path)
@@ -700,13 +675,10 @@ def main():
     timestamp = args.model_path + f"_results/{args.method}/" + timestamp
     os.makedirs(timestamp, exist_ok=True)
 
-    selected_scene_names = resolve_scene_name_filter(args.scene_names, DEFAULT_SCENE_NAMES)
-    calibration_scene_names = resolve_scene_name_filter(args.calibration_scene_names)
     calibration_state = initialize_quant_calibration(
         model,
         args,
         summary_path=os.path.join(timestamp, "quant_calibration.json"),
-        scene_name_filter=calibration_scene_names,
     )
 
     nusc = NuScenes(version=args.version, dataroot=args.dataroot)
@@ -718,9 +690,6 @@ def main():
         first_sample_token = scene["first_sample_token"]
         last_sample_token = scene["last_sample_token"]
         name = scene["name"]
-
-        if selected_scene_names and name not in selected_scene_names:
-            continue
 
         front_camera_images = []
         ego_poses = []
