@@ -42,17 +42,25 @@ class LlavaMistralModel(LlavaMetaModel, MistralModel):
 class LlavaMistralForCausalLM(MistralForCausalLM, LlavaMetaForCausalLM):
     config_class = LlavaMistralConfig
 
-    def __init__(self, config):
+    def __init__(self, config, visual_token_num: Optional[int] = None):
         super(MistralForCausalLM, self).__init__(config)
         self.model = LlavaMistralModel(config)
 
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.visual_token_num = visual_token_num
+        self.last_visual_token_num = None
 
         # Initialize weights and apply final processing
         self.post_init()
 
     def get_model(self):
         return self.model
+
+    def get_visual_token_num(self):
+        return self.visual_token_num
+
+    def get_last_visual_token_num(self):
+        return self.last_visual_token_num
 
     def forward(
         self,
@@ -67,9 +75,16 @@ class LlavaMistralForCausalLM(MistralForCausalLM, LlavaMetaForCausalLM):
         output_hidden_states: Optional[bool] = None,
         images: Optional[torch.FloatTensor] = None,
         image_sizes: Optional[List[List[int]]] = None,
+        texts: Optional[Union[str, List[str]]] = None,
+        add_quant: bool = False,
+        alpha: float = 0.7,
+        dynamic_alpha: bool = False,
+        quant_method: str = "l2_norm",
+        pruning_method: str = "cdpruner",
         return_dict: Optional[bool] = None,
         cache_position=None
     ) -> Union[Tuple, CausalLMOutputWithPast]:
+        del cache_position
 
         if inputs_embeds is None:
             (
@@ -86,7 +101,13 @@ class LlavaMistralForCausalLM(MistralForCausalLM, LlavaMetaForCausalLM):
                 past_key_values,
                 labels,
                 images,
-                image_sizes
+                image_sizes,
+                texts=texts,
+                add_quant=add_quant,
+                alpha=alpha,
+                dynamic_alpha=dynamic_alpha,
+                quant_method=quant_method,
+                pruning_method=pruning_method,
             )
 
         return super().forward(
@@ -108,6 +129,13 @@ class LlavaMistralForCausalLM(MistralForCausalLM, LlavaMetaForCausalLM):
         inputs: Optional[torch.Tensor] = None,
         images: Optional[torch.Tensor] = None,
         image_sizes: Optional[torch.Tensor] = None,
+        texts: Optional[Union[str, List[str]]] = None,
+        add_quant: bool = False,
+        alpha: float = 0.7,
+        dynamic_alpha: bool = False,
+        quant_method: str = "l2_norm",
+        pruning_method: str = "cdpruner",
+        return_visual_token_num: bool = False,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
         position_ids = kwargs.pop("position_ids", None)
@@ -130,17 +158,27 @@ class LlavaMistralForCausalLM(MistralForCausalLM, LlavaMetaForCausalLM):
                 None,
                 None,
                 images,
-                image_sizes=image_sizes
+                image_sizes=image_sizes,
+                texts=texts,
+                add_quant=add_quant,
+                alpha=alpha,
+                dynamic_alpha=dynamic_alpha,
+                quant_method=quant_method,
+                pruning_method=pruning_method,
             )
         else:
             inputs_embeds = self.get_model().embed_tokens(inputs)
+            self.last_visual_token_num = 0
 
-        return super().generate(
+        outputs = super().generate(
             position_ids=position_ids,
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
             **kwargs
         )
+        if return_visual_token_num:
+            return outputs, self.last_visual_token_num
+        return outputs
 
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None,
                                       inputs_embeds=None, **kwargs):

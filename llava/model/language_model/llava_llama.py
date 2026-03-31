@@ -41,18 +41,26 @@ class LlavaLlamaModel(LlavaMetaModel, LlamaModel):
 class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
     config_class = LlavaConfig
 
-    def __init__(self, config):
+    def __init__(self, config, visual_token_num: Optional[int] = None):
         super(LlamaForCausalLM, self).__init__(config)
         self.model = LlavaLlamaModel(config)
         self.pretraining_tp = config.pretraining_tp
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.visual_token_num = visual_token_num
+        self.last_visual_token_num = None
 
         # Initialize weights and apply final processing
         self.post_init()
 
     def get_model(self):
         return self.model
+
+    def get_visual_token_num(self):
+        return self.visual_token_num
+
+    def get_last_visual_token_num(self):
+        return self.last_visual_token_num
 
     def forward(
         self,
@@ -67,6 +75,12 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         output_hidden_states: Optional[bool] = None,
         images: Optional[torch.FloatTensor] = None,
         image_sizes: Optional[List[List[int]]] = None,
+        texts: Optional[Union[str, List[str]]] = None,
+        add_quant: bool = False,
+        alpha: float = 0.7,
+        dynamic_alpha: bool = False,
+        quant_method: str = "l2_norm",
+        pruning_method: str = "cdpruner",
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
 
@@ -85,7 +99,13 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
                 past_key_values,
                 labels,
                 images,
-                image_sizes
+                image_sizes,
+                texts=texts,
+                add_quant=add_quant,
+                alpha=alpha,
+                dynamic_alpha=dynamic_alpha,
+                quant_method=quant_method,
+                pruning_method=pruning_method,
             )
 
         return super().forward(
@@ -107,6 +127,13 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         inputs: Optional[torch.Tensor] = None,
         images: Optional[torch.Tensor] = None,
         image_sizes: Optional[torch.Tensor] = None,
+        texts: Optional[Union[str, List[str]]] = None,
+        add_quant: bool = False,
+        alpha: float = 0.7,
+        dynamic_alpha: bool = False,
+        quant_method: str = "l2_norm",
+        pruning_method: str = "cdpruner",
+        return_visual_token_num: bool = False,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
         position_ids = kwargs.pop("position_ids", None)
@@ -129,17 +156,27 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
                 None,
                 None,
                 images,
-                image_sizes=image_sizes
+                image_sizes=image_sizes,
+                texts=texts,
+                add_quant=add_quant,
+                alpha=alpha,
+                dynamic_alpha=dynamic_alpha,
+                quant_method=quant_method,
+                pruning_method=pruning_method,
             )
         else:
             inputs_embeds = self.get_model().embed_tokens(inputs)
+            self.last_visual_token_num = 0
 
-        return super().generate(
+        outputs = super().generate(
             position_ids=position_ids,
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
             **kwargs
         )
+        if return_visual_token_num:
+            return outputs, self.last_visual_token_num
+        return outputs
 
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None,
                                       inputs_embeds=None, **kwargs):

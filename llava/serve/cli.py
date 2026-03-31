@@ -29,7 +29,17 @@ def main(args):
     disable_torch_init()
 
     model_name = get_model_name_from_path(args.model_path)
-    tokenizer, model, image_processor, context_len = load_pretrained_model(args.model_path, args.model_base, model_name, args.load_8bit, args.load_4bit, device=args.device)
+    tokenizer, model, image_processor, context_len = load_pretrained_model(
+        args.model_path,
+        args.model_base,
+        model_name,
+        args.load_8bit,
+        args.load_4bit,
+        device=args.device,
+        visual_token_num=args.visual_token_num,
+        use_qvlm_custom_bnb=args.use_qvlm_custom_bnb,
+        custom_bnb_path=args.custom_bnb_path,
+    )
 
     if "llama-2" in model_name.lower():
         conv_mode = "llava_llama_2"
@@ -74,6 +84,7 @@ def main(args):
             break
 
         print(f"{roles[1]}: ", end="")
+        pruning_text = inp
 
         if image is not None:
             # first message
@@ -93,6 +104,16 @@ def main(args):
         streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
 
         with torch.inference_mode():
+            generate_kwargs = {}
+            if args.visual_token_num is not None:
+                generate_kwargs.update(
+                    texts=pruning_text,
+                    add_quant=args.add_quant,
+                    alpha=args.alpha,
+                    dynamic_alpha=args.dynamic_alpha,
+                    quant_method=args.quant_method,
+                    pruning_method=args.pruning_method,
+                )
             output_ids = model.generate(
                 input_ids,
                 images=image_tensor,
@@ -101,7 +122,9 @@ def main(args):
                 temperature=args.temperature,
                 max_new_tokens=args.max_new_tokens,
                 streamer=streamer,
-                use_cache=True)
+                use_cache=True,
+                **generate_kwargs,
+            )
 
         outputs = tokenizer.decode(output_ids[0]).strip()
         conv.messages[-1][-1] = outputs
@@ -121,6 +144,14 @@ if __name__ == "__main__":
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--load-8bit", action="store_true")
     parser.add_argument("--load-4bit", action="store_true")
+    parser.add_argument("--use-qvlm-custom-bnb", action="store_true")
+    parser.add_argument("--custom-bnb-path", type=str, default=None)
+    parser.add_argument("--visual-token-num", type=int, default=None)
+    parser.add_argument("--add-quant", action="store_true")
+    parser.add_argument("--alpha", type=float, default=0.7)
+    parser.add_argument("--dynamic-alpha", action="store_true", default=False)
+    parser.add_argument("--quant-method", type=str, default="l2_norm")
+    parser.add_argument("--pruning-method", type=str, default="cdpruner", choices=["cdpruner", "visionzip"])
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
     main(args)

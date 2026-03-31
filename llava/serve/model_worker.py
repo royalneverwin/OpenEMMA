@@ -45,7 +45,8 @@ class ModelWorker:
     def __init__(self, controller_addr, worker_addr,
                  worker_id, no_register,
                  model_path, model_base, model_name,
-                 load_8bit, load_4bit, device, use_flash_attn=False):
+                 load_8bit, load_4bit, device, use_flash_attn=False,
+                 visual_token_num=None, use_qvlm_custom_bnb=False, custom_bnb_path=None):
         self.controller_addr = controller_addr
         self.worker_addr = worker_addr
         self.worker_id = worker_id
@@ -61,9 +62,14 @@ class ModelWorker:
             self.model_name = model_name
 
         self.device = device
+        self.visual_token_num = visual_token_num
         logger.info(f"Loading the model {self.model_name} on worker {worker_id} ...")
         self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
-            model_path, model_base, self.model_name, load_8bit, load_4bit, device=self.device, use_flash_attn=use_flash_attn)
+            model_path, model_base, self.model_name, load_8bit, load_4bit,
+            device=self.device, use_flash_attn=use_flash_attn,
+            visual_token_num=visual_token_num,
+            use_qvlm_custom_bnb=use_qvlm_custom_bnb,
+            custom_bnb_path=custom_bnb_path)
         self.is_multimodal = 'llava' in self.model_name.lower()
 
         if not no_register:
@@ -155,6 +161,19 @@ class ModelWorker:
             images = None
             image_args = {}
 
+        pruning_args = {}
+        if self.visual_token_num is not None and self.is_multimodal:
+            pruning_text = params.get("qapruner_text", prompt)
+            pruning_text = pruning_text.replace(DEFAULT_IMAGE_TOKEN, "").replace(DEFAULT_IM_START_TOKEN, "").replace(DEFAULT_IM_END_TOKEN, "").strip()
+            pruning_args = {
+                "texts": pruning_text,
+                "add_quant": bool(params.get("add_quant", False)),
+                "alpha": float(params.get("alpha", 0.7)),
+                "dynamic_alpha": bool(params.get("dynamic_alpha", False)),
+                "quant_method": params.get("quant_method", "l2_norm"),
+                "pruning_method": params.get("pruning_method", "cdpruner"),
+            }
+
         temperature = float(params.get("temperature", 1.0))
         top_p = float(params.get("top_p", 1.0))
         max_context_length = getattr(model.config, 'max_position_embeddings', 2048)
@@ -181,7 +200,8 @@ class ModelWorker:
             max_new_tokens=max_new_tokens,
             streamer=streamer,
             use_cache=True,
-            **image_args
+            **image_args,
+            **pruning_args,
         ))
         thread.start()
 
@@ -268,6 +288,9 @@ if __name__ == "__main__":
     parser.add_argument("--load-8bit", action="store_true")
     parser.add_argument("--load-4bit", action="store_true")
     parser.add_argument("--use-flash-attn", action="store_true")
+    parser.add_argument("--visual-token-num", type=int, default=None)
+    parser.add_argument("--use-qvlm-custom-bnb", action="store_true")
+    parser.add_argument("--custom-bnb-path", type=str, default=None)
     args = parser.parse_args()
     logger.info(f"args: {args}")
 
@@ -284,5 +307,8 @@ if __name__ == "__main__":
                          args.load_8bit,
                          args.load_4bit,
                          args.device,
-                         use_flash_attn=args.use_flash_attn)
+                         use_flash_attn=args.use_flash_attn,
+                         visual_token_num=args.visual_token_num,
+                         use_qvlm_custom_bnb=args.use_qvlm_custom_bnb,
+                         custom_bnb_path=args.custom_bnb_path)
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
