@@ -632,67 +632,65 @@ def load_requested_model(args):
     processor = None
     tokenizer = None
 
-    try:
-        if "qwen" in args.model_path or "Qwen" in args.model_path:
-            try:
-                model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                    "/root/OpenEMMA/models/Qwen2.5-VL-3B-Instruct",
-                    torch_dtype=torch.bfloat16,
-                    attn_implementation="flash_attention_2",
-                    device_map="auto",
-                )
-                processor = AutoProcessor.from_pretrained("/root/OpenEMMA/models/Qwen2.5-VL-3B-Instruct")
-                print("已本地加载 Qwen2.5-VL-3B-Instruct 并启用 flash attention。")
-            except Exception as exc:
-                print("Qwen2.5-VL-3B-Instruct 加载失败，尝试加载 Qwen2-VL-7B-Instruct。")
-                print(exc)
-                model = Qwen2VLForConditionalGeneration.from_pretrained(
-                    "Qwen/Qwen2-VL-7B-Instruct",
-                    torch_dtype=torch.bfloat16,
-                    device_map="auto",
-                )
-                processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-7B-Instruct")
-                print("已加载 Qwen2-VL-7B-Instruct。")
-        elif "llama" in args.model_path or "Llama" in args.model_path:
-            model = MllamaForConditionalGeneration.from_pretrained(
-                args.model_path,
+    if "qwen" in args.model_path or "Qwen" in args.model_path:
+        try:
+            model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                "/root/OpenEMMA/models/Qwen2.5-VL-3B-Instruct",
+                torch_dtype=torch.bfloat16,
+                attn_implementation="flash_attention_2",
+                device_map="auto",
+            )
+            processor = AutoProcessor.from_pretrained("/root/OpenEMMA/models/Qwen2.5-VL-3B-Instruct")
+            print("已本地加载 Qwen2.5-VL-3B-Instruct 并启用 flash attention。")
+        except Exception as exc:
+            print("Qwen2.5-VL-3B-Instruct 加载失败，尝试加载 Qwen2-VL-7B-Instruct。")
+            print(exc)
+            model = Qwen2VLForConditionalGeneration.from_pretrained(
+                "Qwen/Qwen2-VL-7B-Instruct",
                 torch_dtype=torch.bfloat16,
                 device_map="auto",
             )
-            processor = AutoProcessor.from_pretrained(args.model_path)
-            print(f"已加载 Llama 视觉模型：{args.model_path}")
-        elif args.model_path == "llava":
-            disable_torch_init()
-            args.llava_model_name = "llava-v1.6-mistral-7b"
-            tokenizer, model, processor, _ = load_pretrained_model(
-                "liuhaotian/llava-v1.6-mistral-7b",
-                None,
-                args.llava_model_name,
-                load_8bit=args.load_8bit,
-                load_4bit=args.load_4bit,
-                use_flash_attn=args.use_flash_attn,
-                visual_token_num=args.visual_token_num,
-                use_qvlm_custom_bnb=args.use_qvlm_custom_bnb,
-                custom_bnb_path=args.custom_bnb_path,
-            )
-        elif "llava" in args.model_path:
-            disable_torch_init()
-            args.llava_model_name = get_model_name_from_path(args.model_path)
-            tokenizer, model, processor, _ = load_pretrained_model(
-                args.model_path,
-                None,
-                args.llava_model_name,
-                load_8bit=args.load_8bit,
-                load_4bit=args.load_4bit,
-                use_flash_attn=args.use_flash_attn,
-                visual_token_num=args.visual_token_num,
-                use_qvlm_custom_bnb=args.use_qvlm_custom_bnb,
-                custom_bnb_path=args.custom_bnb_path,
-            )
-        else:
-            print(f"未加载本地模型，推理将依赖外部服务或后续逻辑：{args.model_path}")
-    except Exception as exc:
-        print("模型加载出现异常：", exc)
+            processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-7B-Instruct")
+            print("已加载 Qwen2-VL-7B-Instruct。")
+    elif "llama" in args.model_path or "Llama" in args.model_path:
+        model = MllamaForConditionalGeneration.from_pretrained(
+            args.model_path,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+        )
+        processor = AutoProcessor.from_pretrained(args.model_path)
+        print(f"已加载 Llama 视觉模型：{args.model_path}")
+    elif args.model_path == "llava":
+        disable_torch_init()
+        args.llava_model_name = "llava-v1.6-mistral-7b"
+        tokenizer, model, processor, _ = load_pretrained_model(
+            "liuhaotian/llava-v1.6-mistral-7b",
+            None,
+            args.llava_model_name,
+            load_8bit=args.load_8bit,
+            load_4bit=args.load_4bit,
+            use_flash_attn=args.use_flash_attn,
+            visual_token_num=args.visual_token_num,
+            use_qvlm_custom_bnb=args.use_qvlm_custom_bnb,
+            custom_bnb_path=args.custom_bnb_path,
+        )
+    elif "llava" in args.model_path:
+        disable_torch_init()
+        args.llava_model_name = get_model_name_from_path(args.model_path)
+        tokenizer, model, processor, _ = load_pretrained_model(
+            args.model_path,
+            None,
+            args.llava_model_name,
+            load_8bit=args.load_8bit,
+            load_4bit=args.load_4bit,
+            use_flash_attn=args.use_flash_attn,
+            visual_token_num=args.visual_token_num,
+            use_qvlm_custom_bnb=args.use_qvlm_custom_bnb,
+            custom_bnb_path=args.custom_bnb_path,
+        )
+    else:
+        print(f"未加载本地模型，推理将依赖外部服务或后续逻辑：{args.model_path}")
+
 
     return tokenizer, model, processor
 
