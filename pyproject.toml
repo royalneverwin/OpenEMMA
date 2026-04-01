@@ -8,6 +8,7 @@ dependencies = [
     "torch>=1.8.1",
     "torchvision>=0.9.1",
     "accelerate",
+    "flash-attn==2.7.0.post2",
     "matplotlib>=3.2.2",
     "numpy>=1.18.5,<2.0",
     "opencv-python>=4.1.2",
@@ -32,3 +33,6 @@ dependencies = [
 
 [tool.uv]
 package = false
+
+[tool.uv.extra-build-dependencies]
+flash-attn = ["torch>=1.8.1"]
