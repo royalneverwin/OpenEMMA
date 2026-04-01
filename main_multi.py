@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import re
+import shutil
 import time
 from datetime import datetime
 from math import atan2
@@ -26,6 +27,7 @@ except ImportError:
 
 MERGE_WAIT_TIMEOUT_SECONDS = 24 * 60 * 60
 MERGE_POLL_INTERVAL_SECONDS = 5
+OUTPUT_INIT_MARKER = ".output_dir_initialized.json"
 
 
 def env_or_arg_int(env_name, arg_value):
@@ -38,6 +40,7 @@ def resolve_runtime_context(args):
     rank = env_or_arg_int("RANK", args.rank)
     world_size = env_or_arg_int("WORLD_SIZE", args.world_size)
     local_rank = env_or_arg_int("LOCAL_RANK", args.local_rank)
+    launch_time = time.time()
 
     if torch.cuda.is_available():
         device_count = torch.cuda.device_count()
@@ -55,6 +58,7 @@ def resolve_runtime_context(args):
         "world_size": world_size,
         "local_rank": local_rank,
         "device": device,
+        "launch_time": launch_time,
     }
 
 
@@ -79,6 +83,27 @@ def build_output_dirs(args, context):
         output_root = args.output_dir
     else:
         output_root = os.path.join(f"{args.model_path}_results", args.method, f"multi_{run_name}")
+
+    marker_path = os.path.join(output_root, OUTPUT_INIT_MARKER)
+    if context["rank"] == 0:
+        if os.path.exists(output_root) and not args.resume:
+            shutil.rmtree(output_root)
+        os.makedirs(output_root, exist_ok=True)
+        with open(marker_path, "w") as file:
+            json.dump({"launch_time": context["launch_time"], "resume": args.resume}, file)
+    else:
+        deadline = time.time() + MERGE_WAIT_TIMEOUT_SECONDS
+        while True:
+            if os.path.exists(marker_path):
+                with open(marker_path, "r") as file:
+                    marker = json.load(file)
+                if marker.get("launch_time", 0) >= context["launch_time"] - 1:
+                    break
+            if time.time() >= deadline:
+                raise TimeoutError(
+                    f"Timed out while waiting for rank 0 to initialize output directory `{output_root}`."
+                )
+            time.sleep(MERGE_POLL_INTERVAL_SECONDS)
 
     rank_output_dir = os.path.join(output_root, f"rank{context['rank']:02d}")
     os.makedirs(rank_output_dir, exist_ok=True)
@@ -205,6 +230,12 @@ def load_requested_model_on_device(args, device):
     return tokenizer, model, processor
 
 
+def build_scene_output_dir(rank_output_dir, scene_idx, scene_name):
+    scene_dir = os.path.join(rank_output_dir, f"scene_{scene_idx:05d}_{scene_name}")
+    os.makedirs(scene_dir, exist_ok=True)
+    return scene_dir
+
+
 def run_shared_offline_calibration(nusc, scenes, processor, model, tokenizer, args, calibration_state, context):
     if calibration_state is None or calibration_state["completed"]:
         return
@@ -243,15 +274,20 @@ def run_shared_offline_calibration(nusc, scenes, processor, model, tokenizer, ar
         single_main.finish_quant_calibration(model, calibration_state, status="partial")
 
 
-def evaluate_shard(nusc, scenes, processor, model, tokenizer, args, output_dir, context):
+def evaluate_shard(nusc, scene_entries, completed_scene_indices, processor, model, tokenizer, args, output_dir, context):
     results_path = os.path.join(output_dir, "ade_results.jsonl")
     processed_scene_count = 0
 
-    for scene in scenes:
+    for scene_idx, scene in scene_entries:
+        if scene_idx in completed_scene_indices:
+            log(context, f"Scene {scene['name']} (index={scene_idx}) already exists in rank-local ade_results.jsonl, skipping.")
+            continue
+
         token, name, front_camera_images, ego_poses, camera_params = single_main.load_scene_sequence(nusc, scene, args)
         scene_length = len(front_camera_images)
+        scene_output_dir = build_scene_output_dir(output_dir, scene_idx, name)
 
-        log(context, f"Scene {name} has {scene_length} frames")
+        log(context, f"Scene {name} (index={scene_idx}) has {scene_length} frames")
         if scene_length < single_main.TTL_LEN:
             log(context, f"Scene {name} has less than {single_main.TTL_LEN} frames, skipping.")
             continue
@@ -271,7 +307,7 @@ def evaluate_shard(nusc, scenes, processor, model, tokenizer, args, output_dir, 
             )
             plt.plot(estimated_points[:, 0], estimated_points[:, 1], "g-", label="Reconstruction")
             plt.legend()
-            plt.savefig(os.path.join(output_dir, f"{name}_interpolation.jpg"))
+            plt.savefig(os.path.join(scene_output_dir, f"{name}_interpolation.jpg"))
             plt.close()
 
         prev_intent = None
@@ -362,20 +398,20 @@ def evaluate_shard(nusc, scenes, processor, model, tokenizer, args, output_dir, 
 
             if args.plot:
                 cam_images_sequence.append(img.copy())
-                cv2.imwrite(os.path.join(output_dir, f"{name}_{i}_front_cam.jpg"), img)
+                cv2.imwrite(os.path.join(scene_output_dir, f"{name}_{i}_front_cam.jpg"), img)
 
                 plt.plot(fut_ego_traj_world[:, 0], fut_ego_traj_world[:, 1], "r-", label="GT")
                 plt.plot(pred_traj[:, 0], pred_traj[:, 1], "b-", label="Pred")
                 plt.legend()
                 plt.title(f"Scene: {name}, Frame: {i}, ADE: {ade}")
-                plt.savefig(os.path.join(output_dir, f"{name}_{i}_traj.jpg"))
+                plt.savefig(os.path.join(scene_output_dir, f"{name}_{i}_traj.jpg"))
                 plt.close()
 
-                np.save(os.path.join(output_dir, f"{name}_{i}_pred_traj.npy"), pred_traj)
-                np.save(os.path.join(output_dir, f"{name}_{i}_pred_curvatures.npy"), pred_curvatures)
-                np.save(os.path.join(output_dir, f"{name}_{i}_pred_speeds.npy"), pred_speeds)
+                np.save(os.path.join(scene_output_dir, f"{name}_{i}_pred_traj.npy"), pred_traj)
+                np.save(os.path.join(scene_output_dir, f"{name}_{i}_pred_curvatures.npy"), pred_curvatures)
+                np.save(os.path.join(scene_output_dir, f"{name}_{i}_pred_speeds.npy"), pred_speeds)
 
-                with open(os.path.join(output_dir, f"{name}_{i}_logs.txt"), "w") as file:
+                with open(os.path.join(scene_output_dir, f"{name}_{i}_logs.txt"), "w") as file:
                     file.write(f"Scene Description: {scene_description}\n")
                     file.write(f"Object Description: {object_description}\n")
                     file.write(f"Intent Description: {updated_intent}\n")
@@ -392,6 +428,7 @@ def evaluate_shard(nusc, scenes, processor, model, tokenizer, args, output_dir, 
 
         result = {
             "name": name,
+            "scene_index": scene_idx,
             "token": token,
             "rank": context["rank"],
             "ade1s": mean_ade1s,
@@ -406,7 +443,7 @@ def evaluate_shard(nusc, scenes, processor, model, tokenizer, args, output_dir, 
         processed_scene_count += 1
 
         if args.plot and cam_images_sequence:
-            single_main.WriteImageSequenceToVideo(cam_images_sequence, os.path.join(output_dir, name))
+            single_main.WriteImageSequenceToVideo(cam_images_sequence, os.path.join(scene_output_dir, name))
 
     return processed_scene_count
 
@@ -450,10 +487,13 @@ def main():
     parser.add_argument("--local-rank", "--local_rank", dest="local_rank", type=int, default=0)
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--output-dir", type=str, default=None)
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
 
     context = resolve_runtime_context(args)
     output_root, rank_output_dir = build_output_dirs(args, context)
+    rank_results_path = os.path.join(rank_output_dir, "ade_results.jsonl")
+    completed_scene_indices = single_main.load_completed_scene_indices(rank_results_path) if args.resume else set()
     status = {
         "rank": context["rank"],
         "world_size": context["world_size"],
@@ -465,6 +505,11 @@ def main():
         "error": None,
     }
     write_rank_status(rank_output_dir, status)
+    if args.resume:
+        log(
+            context,
+            f"Resume enabled: found {len(completed_scene_indices)} completed scenes in {rank_results_path}.",
+        )
 
     with open(os.path.join(rank_output_dir, "runtime.json"), "w") as file:
         json.dump(
@@ -491,8 +536,9 @@ def main():
 
         nusc = NuScenes(version=args.version, dataroot=args.dataroot)
         scenes = nusc.scene
-        shard_scenes = scenes[context["rank"]::context["world_size"]]
-        log(context, f"Number of scenes: total={len(scenes)}, shard={len(shard_scenes)}")
+        scene_entries = list(enumerate(scenes))
+        shard_scene_entries = scene_entries[context["rank"]::context["world_size"]]
+        log(context, f"Number of scenes: total={len(scenes)}, shard={len(shard_scene_entries)}")
 
         run_shared_offline_calibration(
             nusc,
@@ -507,7 +553,8 @@ def main():
 
         processed_scene_count = evaluate_shard(
             nusc,
-            shard_scenes,
+            shard_scene_entries,
+            completed_scene_indices,
             processor,
             model,
             tokenizer,

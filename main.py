@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import re
+import shutil
 from datetime import datetime
 from math import atan2
 
@@ -164,6 +165,49 @@ def compute_scene_motion_features(ego_poses):
     ego_traj_world = [ego_pose["translation"][:3] for ego_pose in ego_poses]
 
     return scene_length, ego_poses_world, ego_velocities, ego_curvatures, estimated_points, ego_traj_world
+
+
+def build_scene_output_dir(output_dir, scene_idx, scene_name):
+    scene_dir = os.path.join(output_dir, f"scene_{scene_idx:05d}_{scene_name}")
+    os.makedirs(scene_dir, exist_ok=True)
+    return scene_dir
+
+
+def load_completed_scene_indices(results_path):
+    completed_scene_indices = set()
+    if not os.path.exists(results_path):
+        return completed_scene_indices
+
+    with open(results_path, "r") as file:
+        for line_number, line in enumerate(file, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                print(
+                    f"Skipping malformed JSONL record at {results_path}:{line_number}; "
+                    "resume will ignore this partial line."
+                )
+                continue
+
+            scene_index = record.get("scene_index")
+            if scene_index is None:
+                continue
+            try:
+                completed_scene_indices.add(int(scene_index))
+            except (TypeError, ValueError):
+                print(
+                    f"Skipping invalid scene_index `{scene_index}` at {results_path}:{line_number}."
+                )
+    return completed_scene_indices
+
+
+def reset_output_dir(output_dir):
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
 
 
 def getMessage(prompt, image=None, args=None):
@@ -718,6 +762,7 @@ def main():
     parser.add_argument("--calibration-search-samples", type=int, default=2)
     parser.add_argument("--calibration-max-new-tokens", type=int, default=32)
     parser.add_argument("--output-dir", type=str, default=None)
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
 
     print(args.model_path)
@@ -729,7 +774,15 @@ def main():
     else:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         output_dir = args.model_path + f"_results/{args.method}/" + timestamp
-    os.makedirs(output_dir, exist_ok=True)
+    if args.resume:
+        os.makedirs(output_dir, exist_ok=True)
+    else:
+        reset_output_dir(output_dir)
+
+    results_path = os.path.join(output_dir, "ade_results.jsonl")
+    completed_scene_indices = load_completed_scene_indices(results_path) if args.resume else set()
+    if args.resume:
+        print(f"Resume enabled: found {len(completed_scene_indices)} completed scenes in {results_path}.")
 
     calibration_state = initialize_quant_calibration(
         model,
@@ -775,15 +828,20 @@ def main():
             )
             finish_quant_calibration(model, calibration_state, status="partial")
 
-    for scene in scenes:
+    for scene_idx, scene in enumerate(scenes):
+        if scene_idx in completed_scene_indices:
+            print(f"Scene {scene['name']} (index={scene_idx}) already exists in ade_results.jsonl, skipping.")
+            continue
+
         token, name, front_camera_images, ego_poses, camera_params = load_scene_sequence(nusc, scene, args)
         scene_length = len(front_camera_images)
 
-        print(f"Scene {name} has {scene_length} frames")
+        print(f"Scene {name} (index={scene_idx}) has {scene_length} frames")
         if scene_length < TTL_LEN:
             print(f"Scene {name} has less than {TTL_LEN} frames, skipping...")
             continue
 
+        scene_output_dir = build_scene_output_dir(output_dir, scene_idx, name)
         scene_length, ego_poses_world, ego_velocities, ego_curvatures, estimated_points, ego_traj_world = compute_scene_motion_features(ego_poses)
 
         plt.plot(ego_poses_world[:, 0], ego_poses_world[:, 1], "r-", label="GT")
@@ -798,7 +856,7 @@ def main():
             )
             plt.plot(estimated_points[:, 0], estimated_points[:, 1], "g-", label="Reconstruction")
             plt.legend()
-            plt.savefig(f"{output_dir}/{name}_interpolation.jpg")
+            plt.savefig(f"{scene_output_dir}/{name}_interpolation.jpg")
             plt.close()
 
         prev_intent = None
@@ -889,20 +947,20 @@ def main():
 
             if args.plot:
                 cam_images_sequence.append(img.copy())
-                cv2.imwrite(f"{output_dir}/{name}_{i}_front_cam.jpg", img)
+                cv2.imwrite(f"{scene_output_dir}/{name}_{i}_front_cam.jpg", img)
 
                 plt.plot(fut_ego_traj_world[:, 0], fut_ego_traj_world[:, 1], "r-", label="GT")
                 plt.plot(pred_traj[:, 0], pred_traj[:, 1], "b-", label="Pred")
                 plt.legend()
                 plt.title(f"Scene: {name}, Frame: {i}, ADE: {ade}")
-                plt.savefig(f"{output_dir}/{name}_{i}_traj.jpg")
+                plt.savefig(f"{scene_output_dir}/{name}_{i}_traj.jpg")
                 plt.close()
 
-                np.save(f"{output_dir}/{name}_{i}_pred_traj.npy", pred_traj)
-                np.save(f"{output_dir}/{name}_{i}_pred_curvatures.npy", pred_curvatures)
-                np.save(f"{output_dir}/{name}_{i}_pred_speeds.npy", pred_speeds)
+                np.save(f"{scene_output_dir}/{name}_{i}_pred_traj.npy", pred_traj)
+                np.save(f"{scene_output_dir}/{name}_{i}_pred_curvatures.npy", pred_curvatures)
+                np.save(f"{scene_output_dir}/{name}_{i}_pred_speeds.npy", pred_speeds)
 
-                with open(f"{output_dir}/{name}_{i}_logs.txt", "w") as file:
+                with open(f"{scene_output_dir}/{name}_{i}_logs.txt", "w") as file:
                     file.write(f"Scene Description: {scene_description}\n")
                     file.write(f"Object Description: {object_description}\n")
                     file.write(f"Intent Description: {updated_intent}\n")
@@ -919,18 +977,19 @@ def main():
 
         result = {
             "name": name,
+            "scene_index": scene_idx,
             "token": token,
             "ade1s": mean_ade1s,
             "ade2s": mean_ade2s,
             "ade3s": mean_ade3s,
             "avgade": aveg_ade,
         }
-        with open(f"{output_dir}/ade_results.jsonl", "a") as file:
+        with open(results_path, "a") as file:
             file.write(json.dumps(result))
             file.write("\n")
 
         if args.plot and cam_images_sequence:
-            WriteImageSequenceToVideo(cam_images_sequence, f"{output_dir}/{name}")
+            WriteImageSequenceToVideo(cam_images_sequence, f"{scene_output_dir}/{name}")
 
 
 if __name__ == "__main__":
