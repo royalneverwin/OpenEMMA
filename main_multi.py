@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import re
+import time
 from datetime import datetime
 from math import atan2
 
@@ -10,7 +11,6 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import torch.distributed as dist
 from nuscenes import NuScenes
 from transformers import AutoProcessor, MllamaForConditionalGeneration, Qwen2VLForConditionalGeneration
 
@@ -23,6 +23,9 @@ try:
     from transformers import Qwen2_5_VLForConditionalGeneration
 except ImportError:
     Qwen2_5_VLForConditionalGeneration = None
+
+MERGE_WAIT_TIMEOUT_SECONDS = 24 * 60 * 60
+MERGE_POLL_INTERVAL_SECONDS = 5
 
 
 def env_or_arg_int(env_name, arg_value):
@@ -44,26 +47,14 @@ def resolve_runtime_context(args):
             )
         torch.cuda.set_device(local_rank)
         device = f"cuda:{local_rank}"
-        backend = "nccl"
     else:
         device = "cpu"
-        backend = "gloo"
-
-    distributed = False
-    initialized_dist = False
-    if world_size > 1 and "MASTER_ADDR" in os.environ and "MASTER_PORT" in os.environ:
-        if not dist.is_initialized():
-            dist.init_process_group(backend=backend, init_method="env://", rank=rank, world_size=world_size)
-            initialized_dist = True
-        distributed = True
 
     return {
         "rank": rank,
         "world_size": world_size,
         "local_rank": local_rank,
         "device": device,
-        "distributed": distributed,
-        "initialized_dist": initialized_dist,
     }
 
 
@@ -71,26 +62,11 @@ def log(context, message):
     print(f"[rank {context['rank']}] {message}", flush=True)
 
 
-def barrier(context):
-    if context["distributed"] and dist.is_initialized():
-        dist.barrier()
-
-
-def cleanup_distributed(context):
-    if context["initialized_dist"] and dist.is_initialized():
-        dist.destroy_process_group()
-
-
 def resolve_run_name(args, context):
     if args.run_name:
         run_name = args.run_name
-    elif context["distributed"] and dist.is_initialized():
-        run_name = datetime.now().strftime("%Y%m%d-%H%M%S") if context["rank"] == 0 else None
-        run_name_list = [run_name]
-        dist.broadcast_object_list(run_name_list, src=0)
-        run_name = run_name_list[0]
     elif context["world_size"] > 1:
-        run_name = f"manual_multi_ws{context['world_size']}"
+        run_name = os.environ.get("TORCHELASTIC_RUN_ID", f"manual_multi_ws{context['world_size']}")
     else:
         run_name = datetime.now().strftime("%Y%m%d-%H%M%S")
 
@@ -107,6 +83,41 @@ def build_output_dirs(args, context):
     rank_output_dir = os.path.join(output_root, f"rank{context['rank']:02d}")
     os.makedirs(rank_output_dir, exist_ok=True)
     return output_root, rank_output_dir
+
+
+def write_rank_status(rank_output_dir, status):
+    with open(os.path.join(rank_output_dir, "status.json"), "w") as file:
+        json.dump(status, file, indent=2)
+
+
+def wait_for_all_rank_statuses(output_root, world_size, context):
+    deadline = time.time() + MERGE_WAIT_TIMEOUT_SECONDS
+    pending_ranks = set(range(world_size))
+    failed_ranks = {}
+    while pending_ranks:
+        completed_now = set()
+        for rank in pending_ranks:
+            status_path = os.path.join(output_root, f"rank{rank:02d}", "status.json")
+            if not os.path.exists(status_path):
+                continue
+            with open(status_path, "r") as file:
+                status = json.load(file)
+            if status.get("status") == "failed":
+                failed_ranks[rank] = status.get("error")
+                completed_now.add(rank)
+            elif status.get("status") == "completed":
+                completed_now.add(rank)
+        pending_ranks -= completed_now
+        if failed_ranks:
+            raise RuntimeError(f"Some ranks failed: {failed_ranks}")
+        if not pending_ranks:
+            return
+        if time.time() >= deadline:
+            raise TimeoutError(
+                f"Timed out while waiting for ranks {sorted(pending_ranks)} to finish writing status files."
+            )
+        log(context, f"Waiting for ranks {sorted(pending_ranks)} to finish before merging results.")
+        time.sleep(MERGE_POLL_INTERVAL_SECONDS)
 
 
 def load_requested_model_on_device(args, device):
@@ -442,24 +453,35 @@ def main():
     args = parser.parse_args()
 
     context = resolve_runtime_context(args)
-    output_root = None
+    output_root, rank_output_dir = build_output_dirs(args, context)
+    status = {
+        "rank": context["rank"],
+        "world_size": context["world_size"],
+        "local_rank": context["local_rank"],
+        "device": context["device"],
+        "model_path": args.model_path,
+        "status": "running",
+        "processed_scenes": 0,
+        "error": None,
+    }
+    write_rank_status(rank_output_dir, status)
+
+    with open(os.path.join(rank_output_dir, "runtime.json"), "w") as file:
+        json.dump(
+            {
+                "rank": context["rank"],
+                "world_size": context["world_size"],
+                "local_rank": context["local_rank"],
+                "device": context["device"],
+                "model_path": args.model_path,
+            },
+            file,
+            indent=2,
+        )
+
     try:
         log(context, f"Loading model `{args.model_path}` on {context['device']}.")
         tokenizer, model, processor = load_requested_model_on_device(args, context["device"])
-
-        output_root, rank_output_dir = build_output_dirs(args, context)
-        with open(os.path.join(rank_output_dir, "runtime.json"), "w") as file:
-            json.dump(
-                {
-                    "rank": context["rank"],
-                    "world_size": context["world_size"],
-                    "local_rank": context["local_rank"],
-                    "device": context["device"],
-                    "model_path": args.model_path,
-                },
-                file,
-                indent=2,
-            )
 
         calibration_state = single_main.initialize_quant_calibration(
             model,
@@ -494,13 +516,19 @@ def main():
             context,
         )
         log(context, f"Finished evaluation for {processed_scene_count} scenes.")
+        status["processed_scenes"] = processed_scene_count
+        status["status"] = "completed"
+        write_rank_status(rank_output_dir, status)
 
-        barrier(context)
         if context["rank"] == 0 and context["world_size"] > 1:
+            wait_for_all_rank_statuses(output_root, context["world_size"], context)
             merge_rank_results(output_root, context["world_size"])
             log(context, f"Merged shard results into {os.path.join(output_root, 'ade_results.jsonl')}")
-    finally:
-        cleanup_distributed(context)
+    except Exception as exc:
+        status["status"] = "failed"
+        status["error"] = str(exc)
+        write_rank_status(rank_output_dir, status)
+        raise
 
 
 if __name__ == "__main__":
