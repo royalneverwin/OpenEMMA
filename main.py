@@ -717,20 +717,24 @@ def main():
     parser.add_argument("--calibration-samples", type=int, default=8)
     parser.add_argument("--calibration-search-samples", type=int, default=2)
     parser.add_argument("--calibration-max-new-tokens", type=int, default=32)
+    parser.add_argument("--output-dir", type=str, default=None)
     args = parser.parse_args()
 
     print(args.model_path)
 
     tokenizer, model, processor = load_requested_model(args)
 
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    timestamp = args.model_path + f"_results/{args.method}/" + timestamp
-    os.makedirs(timestamp, exist_ok=True)
+    if args.output_dir:
+        output_dir = args.output_dir
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        output_dir = args.model_path + f"_results/{args.method}/" + timestamp
+    os.makedirs(output_dir, exist_ok=True)
 
     calibration_state = initialize_quant_calibration(
         model,
         args,
-        summary_path=os.path.join(timestamp, "quant_calibration.json"),
+        summary_path=os.path.join(output_dir, "quant_calibration.json"),
     )
 
     nusc = NuScenes(version=args.version, dataroot=args.dataroot)
@@ -794,7 +798,7 @@ def main():
             )
             plt.plot(estimated_points[:, 0], estimated_points[:, 1], "g-", label="Reconstruction")
             plt.legend()
-            plt.savefig(f"{timestamp}/{name}_interpolation.jpg")
+            plt.savefig(f"{output_dir}/{name}_interpolation.jpg")
             plt.close()
 
         prev_intent = None
@@ -885,20 +889,20 @@ def main():
 
             if args.plot:
                 cam_images_sequence.append(img.copy())
-                cv2.imwrite(f"{timestamp}/{name}_{i}_front_cam.jpg", img)
+                cv2.imwrite(f"{output_dir}/{name}_{i}_front_cam.jpg", img)
 
                 plt.plot(fut_ego_traj_world[:, 0], fut_ego_traj_world[:, 1], "r-", label="GT")
                 plt.plot(pred_traj[:, 0], pred_traj[:, 1], "b-", label="Pred")
                 plt.legend()
                 plt.title(f"Scene: {name}, Frame: {i}, ADE: {ade}")
-                plt.savefig(f"{timestamp}/{name}_{i}_traj.jpg")
+                plt.savefig(f"{output_dir}/{name}_{i}_traj.jpg")
                 plt.close()
 
-                np.save(f"{timestamp}/{name}_{i}_pred_traj.npy", pred_traj)
-                np.save(f"{timestamp}/{name}_{i}_pred_curvatures.npy", pred_curvatures)
-                np.save(f"{timestamp}/{name}_{i}_pred_speeds.npy", pred_speeds)
+                np.save(f"{output_dir}/{name}_{i}_pred_traj.npy", pred_traj)
+                np.save(f"{output_dir}/{name}_{i}_pred_curvatures.npy", pred_curvatures)
+                np.save(f"{output_dir}/{name}_{i}_pred_speeds.npy", pred_speeds)
 
-                with open(f"{timestamp}/{name}_{i}_logs.txt", "w") as file:
+                with open(f"{output_dir}/{name}_{i}_logs.txt", "w") as file:
                     file.write(f"Scene Description: {scene_description}\n")
                     file.write(f"Object Description: {object_description}\n")
                     file.write(f"Intent Description: {updated_intent}\n")
@@ -921,12 +925,12 @@ def main():
             "ade3s": mean_ade3s,
             "avgade": aveg_ade,
         }
-        with open(f"{timestamp}/ade_results.jsonl", "a") as file:
+        with open(f"{output_dir}/ade_results.jsonl", "a") as file:
             file.write(json.dumps(result))
             file.write("\n")
 
         if args.plot and cam_images_sequence:
-            WriteImageSequenceToVideo(cam_images_sequence, f"{timestamp}/{name}")
+            WriteImageSequenceToVideo(cam_images_sequence, f"{output_dir}/{name}")
 
 
 if __name__ == "__main__":
