@@ -11,6 +11,21 @@ from transformers import (
 )
 
 
+def _clip_from_pretrained(model_cls, model_name, device_map=None):
+    try:
+        return model_cls.from_pretrained(
+            model_name,
+            device_map=device_map,
+            use_safetensors=True,
+        )
+    except Exception as exc:
+        print(
+            f"Falling back to default checkpoint loading for `{model_name}` because "
+            f"safetensors loading was unavailable: {exc}"
+        )
+        return model_cls.from_pretrained(model_name, device_map=device_map)
+
+
 class CLIPVisionTower(nn.Module):
     def __init__(self, vision_tower, args, delay_load=False):
         super().__init__()
@@ -34,7 +49,11 @@ class CLIPVisionTower(nn.Module):
             return
 
         self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
-        self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
+        self.vision_tower = _clip_from_pretrained(
+            CLIPVisionModel,
+            self.vision_tower_name,
+            device_map=device_map,
+        )
         self.vision_tower.requires_grad_(False)
 
         self.is_loaded = True
@@ -46,14 +65,16 @@ class CLIPVisionTower(nn.Module):
             return
 
         CLIPVisionModelWithProjection._no_split_modules = ["CLIPEncoderLayer"]
-        vision_tower_with_projection = CLIPVisionModelWithProjection.from_pretrained(
+        vision_tower_with_projection = _clip_from_pretrained(
+            CLIPVisionModelWithProjection,
             self.vision_tower_name,
             device_map=device_map,
         )
         self.vision_tower.visual_projection = vision_tower_with_projection.visual_projection
 
         self.text_tokenizer = CLIPTokenizerFast.from_pretrained(self.vision_tower_name)
-        self.text_tower = CLIPTextModelWithProjection.from_pretrained(
+        self.text_tower = _clip_from_pretrained(
+            CLIPTextModelWithProjection,
             self.vision_tower_name,
             device_map=device_map,
         )
@@ -181,7 +202,11 @@ class CLIPVisionTowerS2(CLIPVisionTower):
             return
 
         self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
-        self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
+        self.vision_tower = _clip_from_pretrained(
+            CLIPVisionModel,
+            self.vision_tower_name,
+            device_map=device_map,
+        )
         self.vision_tower.requires_grad_(False)
 
         self.image_processor.size["shortest_edge"] = self.s2_image_size
