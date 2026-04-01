@@ -1,0 +1,34 @@
+[project]
+name = "openemma"
+version = "0.1.0"
+description = "OpenEMMA environment definition for uv"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "torch>=1.8.1",
+    "torchvision>=0.9.1",
+    "accelerate",
+    "matplotlib>=3.2.2",
+    "numpy>=1.18.5,<2.0",
+    "opencv-python>=4.1.2",
+    "Pillow>=7.1.2",
+    "PyYAML>=5.3.1",
+    "requests>=2.23.0",
+    "scipy>=1.7.0",
+    "tqdm>=4.41.0",
+    "gdown",
+    "flask",
+    "Werkzeug",
+    "transformers>=4.46.2",
+    "ultralytics",
+    "qwen_vl_utils",
+    "pyquaternion",
+    "nuscenes-devkit",
+    "openai",
+    "pandas>=1.1.4",
+    "seaborn>=0.11.0",
+    "thop",
+]
+
+[tool.uv]
+package = false
