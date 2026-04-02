@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from nuscenes import NuScenes
+from tqdm import tqdm
 from transformers import AutoProcessor, MllamaForConditionalGeneration, Qwen2VLForConditionalGeneration
 
 import main as single_main
@@ -242,8 +243,8 @@ def run_shared_offline_calibration(nusc, scenes, processor, model, tokenizer, ar
         scene_length = len(front_camera_images)
 
         log(context, f"Calibration scene {name} has {scene_length} frames")
-        if scene_length < single_main.TTL_LEN:
-            log(context, f"Calibration scene {name} has less than {single_main.TTL_LEN} frames, skipping.")
+        if scene_length < single_main.OBS_LEN:
+            log(context, f"Calibration scene {name} has less than {single_main.OBS_LEN} frames, skipping.")
             continue
 
         _, _, ego_velocities, ego_curvatures, _, _ = single_main.compute_scene_motion_features(ego_poses)
@@ -274,11 +275,18 @@ def evaluate_shard(nusc, scene_entries, completed_scene_indices, processor, mode
     results_path = os.path.join(output_dir, "ade_results.jsonl")
     processed_scene_count = 0
 
-    for scene_idx, scene in scene_entries:
+    for scene_idx, scene in tqdm(
+        scene_entries,
+        total=len(scene_entries),
+        desc=f"Rank {context['rank']} scenes",
+        position=context["rank"],
+        leave=True,
+    ):
         if scene_idx in completed_scene_indices:
             log(context, f"Scene {scene['name']} (index={scene_idx}) already exists in rank-local ade_results.jsonl, skipping.")
             continue
 
+        scene_eval_start_time = time.perf_counter()
         token, name, front_camera_images, ego_poses, camera_params = single_main.load_scene_sequence(nusc, scene, args)
         scene_length = len(front_camera_images)
         scene_output_dir = build_scene_output_dir(output_dir, scene_idx, name)
@@ -422,6 +430,10 @@ def evaluate_shard(nusc, scene_entries, completed_scene_indices, processor, mode
         mean_ade3s = np.mean(ade3s_list)
         aveg_ade = np.mean([mean_ade1s, mean_ade2s, mean_ade3s])
 
+        if args.plot and cam_images_sequence:
+            single_main.WriteImageSequenceToVideo(cam_images_sequence, os.path.join(scene_output_dir, name))
+
+        scene_eval_seconds = time.perf_counter() - scene_eval_start_time
         result = {
             "name": name,
             "scene_index": scene_idx,
@@ -431,15 +443,13 @@ def evaluate_shard(nusc, scene_entries, completed_scene_indices, processor, mode
             "ade2s": mean_ade2s,
             "ade3s": mean_ade3s,
             "avgade": aveg_ade,
+            "scene_eval_seconds": scene_eval_seconds,
         }
         with open(results_path, "a") as file:
             file.write(json.dumps(result))
             file.write("\n")
 
         processed_scene_count += 1
-
-        if args.plot and cam_images_sequence:
-            single_main.WriteImageSequenceToVideo(cam_images_sequence, os.path.join(scene_output_dir, name))
 
     return processed_scene_count
 

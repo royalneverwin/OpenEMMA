@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import time
 from datetime import datetime
 from math import atan2
 
@@ -15,6 +16,7 @@ from nuscenes import NuScenes
 from openai import OpenAI
 from PIL import Image
 from qwen_vl_utils import process_vision_info
+from tqdm import tqdm
 from transformers import (
     AutoProcessor,
     MllamaForConditionalGeneration,
@@ -47,10 +49,22 @@ OBS_LEN = 10
 FUT_LEN = 10
 TTL_LEN = OBS_LEN + FUT_LEN
 
-QAPRUNER_TEXT_SCENE = "Driving scene: lights, vehicles, pedestrians, lane markings."
-QAPRUNER_TEXT_OBJECTS = "Important road users and their image locations."
-QAPRUNER_TEXT_INTENT = "Ego driving intent from lanes and traffic."
-QAPRUNER_TEXT_MOTION = "Scene and ego motion for next driving action."
+QAPRUNER_TEXT_SCENE = (
+    "Front-view driving scene with traffic lights, vehicles, pedestrians, lane markings, "
+    "road layout, and drivable space."
+)
+QAPRUNER_TEXT_OBJECTS = (
+    "Important road users and hazards with image location, relative distance, motion, and "
+    "possible interaction with the ego vehicle."
+)
+QAPRUNER_TEXT_INTENT = (
+    "Ego driving intent from lane geometry, traffic flow, right of way, obstacles, and "
+    "nearby road users."
+)
+QAPRUNER_TEXT_MOTION = (
+    "Scene context and recent ego motion for predicting near-future action, speed change, "
+    "curvature, and path."
+)
 
 
 def str2bool(value):
@@ -439,56 +453,55 @@ def run_scene_quant_calibration(
     if state is None or state["completed"]:
         return
 
-    total_windows = max(0, len(front_camera_images) - OBS_LEN + 1)
-    for window_idx in range(total_windows):
-        if state["completed"]:
-            break
+    if len(front_camera_images) < OBS_LEN:
+        return
 
-        current_image = front_camera_images[window_idx + OBS_LEN - 1]
-        obs_ego_velocities = ego_velocities[window_idx:window_idx + OBS_LEN]
-        obs_ego_curvatures = ego_curvatures[window_idx:window_idx + OBS_LEN]
-        prompts = build_calibration_prompts(obs_ego_velocities, obs_ego_curvatures)
-        prompt = prompts[state["prompt_index"] % len(prompts)]
+    window_idx = 0
+    current_image = front_camera_images[OBS_LEN - 1]
+    obs_ego_velocities = ego_velocities[:OBS_LEN]
+    obs_ego_curvatures = ego_curvatures[:OBS_LEN]
+    prompts = build_calibration_prompts(obs_ego_velocities, obs_ego_curvatures)
+    prompt = prompts[state["prompt_index"] % len(prompts)]
 
-        generate_llava_text(
-            prompt,
-            current_image,
-            processor,
-            model,
-            tokenizer,
-            args,
-            max_new_tokens=args.calibration_max_new_tokens,
-            do_sample=False,
-            temperature=0.0,
-            top_p=None,
-            num_beams=1,
-            enable_qapruner=False,
+    generate_llava_text(
+        prompt,
+        current_image,
+        processor,
+        model,
+        tokenizer,
+        args,
+        max_new_tokens=args.calibration_max_new_tokens,
+        do_sample=False,
+        temperature=0.0,
+        top_p=None,
+        num_beams=1,
+        enable_qapruner=False,
+    )
+
+    state["prompt_index"] += 1
+    if state["phase"] == "calibrate":
+        state["calibrate_done"] += 1
+        print(
+            f"Calibration phase: {state['calibrate_done']}/{state['calibrate_target']} "
+            f"(scene={scene_name}, window={window_idx})"
         )
-
-        state["prompt_index"] += 1
-        if state["phase"] == "calibrate":
-            state["calibrate_done"] += 1
-            print(
-                f"Calibration phase: {state['calibrate_done']}/{state['calibrate_target']} "
-                f"(scene={scene_name}, window={window_idx})"
-            )
-            if state["calibrate_done"] >= state["calibrate_target"]:
-                if state["search_target"] > 0:
-                    state["phase"] = "search"
-                    set_quant_act_mode(model, calibrate=True, search=True)
-                    print("Switching QuantAct calibration to search mode.")
-                else:
-                    finish_quant_calibration(model, state, status="completed")
-        else:
-            state["search_done"] += 1
-            print(
-                f"Search phase: {state['search_done']}/{state['search_target']} "
-                f"(scene={scene_name}, window={window_idx})"
-            )
-            if state["search_done"] >= state["search_target"]:
+        if state["calibrate_done"] >= state["calibrate_target"]:
+            if state["search_target"] > 0:
+                state["phase"] = "search"
+                set_quant_act_mode(model, calibrate=True, search=True)
+                print("Switching QuantAct calibration to search mode.")
+            else:
                 finish_quant_calibration(model, state, status="completed")
+    else:
+        state["search_done"] += 1
+        print(
+            f"Search phase: {state['search_done']}/{state['search_target']} "
+            f"(scene={scene_name}, window={window_idx})"
+        )
+        if state["search_done"] >= state["search_target"]:
+            finish_quant_calibration(model, state, status="completed")
 
-        save_calibration_summary(state)
+    save_calibration_summary(state)
 
 
 def vlm_inference(text=None, images=None, sys_message=None, processor=None, model=None, tokenizer=None, args=None, qapruner_text=None):
@@ -825,8 +838,8 @@ def main():
             scene_length = len(front_camera_images)
 
             print(f"Calibration scene {name} has {scene_length} frames")
-            if scene_length < TTL_LEN:
-                print(f"Calibration scene {name} has less than {TTL_LEN} frames, skipping...")
+            if scene_length < OBS_LEN:
+                print(f"Calibration scene {name} has less than {OBS_LEN} frames, skipping...")
                 continue
 
             _, _, ego_velocities, ego_curvatures, _, _ = compute_scene_motion_features(ego_poses)
@@ -852,11 +865,16 @@ def main():
             )
             finish_quant_calibration(model, calibration_state, status="partial")
 
-    for scene_idx, scene in enumerate(scenes):
+    for scene_idx, scene in tqdm(
+        enumerate(scenes),
+        total=len(scenes),
+        desc="Evaluating scenes",
+    ):
         if scene_idx in completed_scene_indices:
             print(f"Scene {scene['name']} (index={scene_idx}) already exists in ade_results.jsonl, skipping.")
             continue
 
+        scene_eval_start_time = time.perf_counter()
         token, name, front_camera_images, ego_poses, camera_params = load_scene_sequence(nusc, scene, args)
         scene_length = len(front_camera_images)
 
@@ -999,6 +1017,10 @@ def main():
         mean_ade3s = np.mean(ade3s_list)
         aveg_ade = np.mean([mean_ade1s, mean_ade2s, mean_ade3s])
 
+        if args.plot and cam_images_sequence:
+            WriteImageSequenceToVideo(cam_images_sequence, f"{scene_output_dir}/{name}")
+
+        scene_eval_seconds = time.perf_counter() - scene_eval_start_time
         result = {
             "name": name,
             "scene_index": scene_idx,
@@ -1007,13 +1029,11 @@ def main():
             "ade2s": mean_ade2s,
             "ade3s": mean_ade3s,
             "avgade": aveg_ade,
+            "scene_eval_seconds": scene_eval_seconds,
         }
         with open(results_path, "a") as file:
             file.write(json.dumps(result))
             file.write("\n")
-
-        if args.plot and cam_images_sequence:
-            WriteImageSequenceToVideo(cam_images_sequence, f"{scene_output_dir}/{name}")
 
 
 if __name__ == "__main__":
