@@ -10,8 +10,29 @@ DATAROOT="${DATAROOT:-/mnt/bn/yufei1900/wangxinhao/paper/data/nuscenes-mini}"
 VERSION="${VERSION:-v1.0-mini}"
 METHOD="${METHOD:-openemma}"
 OUTPUT_DIR="${OUTPUT_DIR:-./output_quant_multi}"
+MASTER_PORT="${MASTER_PORT:-$((20000 + RANDOM % 20000))}"
 
-torchrun --nproc_per_node="${NPROC_PER_NODE}" main_multi.py \
+POSITIONAL_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --master_port|--master-port)
+            MASTER_PORT="$2"
+            shift 2
+            ;;
+        --master_port=*|--master-port=*)
+            MASTER_PORT="${1#*=}"
+            shift
+            ;;
+        *)
+            POSITIONAL_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+echo "Using torchrun master port: ${MASTER_PORT}"
+
+torchrun --nproc_per_node="${NPROC_PER_NODE}" --master_port="${MASTER_PORT}" main_multi.py \
     --model-path "${MODEL_PATH}" \
     --dataroot "${DATAROOT}" \
     --version "${VERSION}" \
@@ -24,4 +45,4 @@ torchrun --nproc_per_node="${NPROC_PER_NODE}" main_multi.py \
     --alpha 0.5 \
     --quant-method quant_error_group \
     --run-calibration \
-    "$@"
+    "${POSITIONAL_ARGS[@]}"
