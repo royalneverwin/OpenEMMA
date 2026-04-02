@@ -441,25 +441,19 @@ def run_scene_quant_calibration(
         prompts = build_calibration_prompts(obs_ego_velocities, obs_ego_curvatures)
         prompt = prompts[state["prompt_index"] % len(prompts)]
 
-        try:
-            generate_llava_text(
-                prompt,
-                current_image,
-                processor,
-                model,
-                tokenizer,
-                args,
-                max_new_tokens=args.calibration_max_new_tokens,
-                do_sample=False,
-                temperature=0.0,
-                top_p=None,
-                num_beams=1,
-            )
-        except Exception as exc:
-            state["error"] = str(exc)
-            print(f"QuantAct calibration failed on scene `{scene_name}`: {exc}")
-            finish_quant_calibration(model, state, status="failed")
-            return
+        generate_llava_text(
+            prompt,
+            current_image,
+            processor,
+            model,
+            tokenizer,
+            args,
+            max_new_tokens=args.calibration_max_new_tokens,
+            do_sample=False,
+            temperature=0.0,
+            top_p=None,
+            num_beams=1,
+        )
 
         state["prompt_index"] += 1
         if state["phase"] == "calibrate":

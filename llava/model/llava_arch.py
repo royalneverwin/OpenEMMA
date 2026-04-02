@@ -264,19 +264,30 @@ class LlavaMetaForCausalLM(ABC):
                 image_features, image_embeds, text_embeds = self.get_model().get_vision_tower()(images, texts=texts)
 
                 batch_size, seq_len, _ = image_features.shape
-                device = image_features.device
-
                 image_features = self.get_model().mm_projector(image_features)
+                device = image_features.device
 
                 image_normalized = image_features / image_features.norm(dim=-1, keepdim=True)
                 image_normalized = image_normalized.float()
                 similarity = torch.matmul(image_normalized, image_normalized.transpose(1, 2))
 
+                image_embeds = image_embeds.to(device=device, dtype=torch.float32)
+                text_embeds = text_embeds.to(device=device, dtype=torch.float32)
+                if text_embeds.ndim == 1:
+                    text_embeds = text_embeds.unsqueeze(0)
+                if text_embeds.shape[0] == 1 and batch_size > 1:
+                    text_embeds = text_embeds.expand(batch_size, -1)
+                elif text_embeds.shape[0] != batch_size:
+                    raise ValueError(
+                        "Text embedding batch size does not match image batch size: "
+                        f"{text_embeds.shape[0]} vs {batch_size}"
+                    )
                 image_embeds = image_embeds / image_embeds.norm(p=2, dim=-1, keepdim=True)
                 text_embeds = text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True)
-                relevance = torch.matmul(image_embeds, text_embeds.t())
-                relevance = (-relevance).mean(dim=-1)
-                relevance = (relevance - relevance.min() + 1e-6) / (relevance.max() - relevance.min() + 1e-8)
+                relevance = -torch.einsum("bsd,bd->bs", image_embeds, text_embeds)
+                relevance_min = relevance.amin(dim=-1, keepdim=True)
+                relevance_max = relevance.amax(dim=-1, keepdim=True)
+                relevance = (relevance - relevance_min + 1e-6) / (relevance_max - relevance_min + 1e-8)
 
                 if add_quant:
                     if quant_method == "l2_norm":
@@ -359,9 +370,11 @@ class LlavaMetaForCausalLM(ABC):
                         alpha = 0.55 - (0.55 - 0.45) * cv_norm
 
                     if quant_method not in ["complex", "complex_l1"]:
-                        quant_min, quant_max = quant_sensitivity.min(), quant_sensitivity.max()
+                        quant_min = quant_sensitivity.amin(dim=-1, keepdim=True)
+                        quant_max = quant_sensitivity.amax(dim=-1, keepdim=True)
                         quant_sensitivity = (quant_sensitivity - quant_min + 1e-8) / (quant_max - quant_min + 1e-8)
 
+                    quant_sensitivity = quant_sensitivity.to(device=device, dtype=relevance.dtype)
                     relevance = alpha * relevance + (1 - alpha) * quant_sensitivity
 
                 kernel = relevance.unsqueeze(2) * similarity * relevance.unsqueeze(1)

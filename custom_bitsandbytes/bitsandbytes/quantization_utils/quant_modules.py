@@ -92,7 +92,7 @@ class QuantAct(Module):
             self.llama_range_max = torch.zeros(target_dim, device=inputs.device, dtype=torch.float32)
 
     def _ensure_clip_range_buffers(self, inputs):
-        target_dim = inputs.shape[1]
+        target_dim = inputs.shape[-2] if inputs.ndim >= 2 else inputs.shape[0]
         if self.CLIP_range_min.numel() != target_dim or self.CLIP_range_min.device != inputs.device:
             self.CLIP_range_min = torch.zeros(target_dim, device=inputs.device, dtype=torch.float32)
             self.CLIP_range_max = torch.zeros(target_dim, device=inputs.device, dtype=torch.float32)
@@ -106,6 +106,18 @@ class QuantAct(Module):
 
         self.activation_range_min = torch.minimum(self.activation_range_min, current_min.to(dtype=torch.float32))
         self.activation_range_max = torch.maximum(self.activation_range_max, current_max.to(dtype=torch.float32))
+
+    def _reduce_channel_range(self, inputs):
+        reduce_dims = tuple(range(inputs.ndim - 1))
+        return inputs.amin(dim=reduce_dims), inputs.amax(dim=reduce_dims)
+
+    def _reduce_token_range(self, inputs):
+        token_min = inputs.amin(dim=-1)
+        token_max = inputs.amax(dim=-1)
+        while token_min.ndim > 1:
+            token_min = token_min.amin(dim=0)
+            token_max = token_max.amax(dim=0)
+        return token_min, token_max
     
     def quantization(self, inputs, quantization_min, quantization_max):
         if isinstance(quantization_min, torch.Tensor):
@@ -178,8 +190,7 @@ class QuantAct(Module):
             self.search_flag = self.search_strategy_judge()
                 
             if self.search_flag:
-                x_min = torch.min(inputs, dim=1)[0].squeeze(dim=0)
-                x_max = torch.max(inputs, dim=1)[0].squeeze(dim=0)
+                x_min, x_max = self._reduce_channel_range(inputs)
                 # in-place operation used on multi-gpus
                 # in-place！！search
                 self.llama_range_min += -self.llama_range_min + torch.min(self.llama_range_min, x_min)
@@ -205,8 +216,7 @@ class QuantAct(Module):
         else:
             self._ensure_clip_range_buffers(inputs)
             # row-wise search
-            x_min = torch.min(inputs, dim=-1)[0].squeeze(dim=0)
-            x_max = torch.max(inputs, dim=-1)[0].squeeze(dim=0)
+            x_min, x_max = self._reduce_token_range(inputs)
             # in-place operation used on multi-gpus
             self.CLIP_range_min += -self.CLIP_range_min + torch.min(self.CLIP_range_min, x_min)
             self.CLIP_range_max += -self.CLIP_range_max + torch.max(self.CLIP_range_max, x_max)
@@ -281,8 +291,7 @@ class QuantAct(Module):
 
         if inputs_calibrate.shape[1] == 1:
             # row-wise  (1, 109, 4096) (1, 109) (8, 1, 4096)
-            current_min = inputs_calibrate.squeeze(dim=0).min(dim=0)[0]
-            current_max = inputs_calibrate.squeeze(dim=0).max(dim=0)[0]
+            current_min, current_max = self._reduce_channel_range(inputs_calibrate)
             self._ensure_activation_range_buffers(current_min, current_max)
             quant_act = self.quantization(x, self.activation_range_min , self.activation_range_max)
 
@@ -293,8 +302,7 @@ class QuantAct(Module):
                 self._ensure_llama_range_buffers(inputs_calibrate)
                 # channel-wise
                 if self.dim != 4096 or self.count_layer == 4: 
-                    self.llama_range_min1 = torch.min(inputs_calibrate, dim=1)[0].squeeze(dim=0)
-                    self.llama_range_max1 = torch.max(inputs_calibrate, dim=1)[0].squeeze(dim=0)
+                    self.llama_range_min1, self.llama_range_max1 = self._reduce_channel_range(inputs_calibrate)
 
                     quant_act = self.quantization(x, self.llama_range_min1 , self.llama_range_max1)
                     self.activation_range_min = self.llama_range_min1
