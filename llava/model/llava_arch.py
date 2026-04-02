@@ -410,7 +410,6 @@ class LlavaMetaForCausalLM(ABC):
     ):
         vision_tower = self.get_vision_tower()
         if vision_tower is None or images is None:
-            setattr(self, "last_visual_token_num", 0)
             return input_ids, position_ids, attention_mask, past_key_values, None, labels
         if input_ids.shape[1] == 1:
             return input_ids, position_ids, attention_mask, past_key_values, None, labels
@@ -592,6 +591,7 @@ class LlavaMetaForCausalLM(ABC):
         else:
             visual_token_num = image_features.shape[1] if image_features.ndim > 2 else image_features.shape[0]
         setattr(self, "last_visual_token_num", int(visual_token_num))
+        print(f"last_visual_token_num = {self.last_visual_token_num}")
 
         if getattr(self.config, "tune_mm_mlp_adapter", False) and getattr(self.config, "mm_use_im_start_end", False):
             raise NotImplementedError

@@ -136,7 +136,16 @@ class CLIPVisionTower(nn.Module):
 
         text_embeds = self._encode_texts(texts)
         image_embeds = self.vision_tower.vision_model.post_layernorm(image_outputs)
+        projection_weight = self.vision_tower.visual_projection.weight
+        image_embeds = image_embeds.to(
+            device=projection_weight.device,
+            dtype=projection_weight.dtype,
+        )
         image_embeds = self.vision_tower.visual_projection(image_embeds)
+        text_embeds = text_embeds.to(
+            device=image_embeds.device,
+            dtype=image_embeds.dtype,
+        )
 
         if output_attentions:
             return image_features, image_embeds, text_embeds, image_forward_outs.attentions

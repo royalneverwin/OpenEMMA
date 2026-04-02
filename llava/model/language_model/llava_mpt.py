@@ -48,7 +48,7 @@ class LlavaMptForCausalLM(MptForCausalLM, LlavaMetaForCausalLM):
         self.transformer = LlavaMptModel(config)
         self.lm_head = torch.nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         self.visual_token_num = visual_token_num
-        self.last_visual_token_num = None
+        self.last_visual_token_num = 0
 
         self.post_init()
 
@@ -139,6 +139,7 @@ class LlavaMptForCausalLM(MptForCausalLM, LlavaMetaForCausalLM):
         return_visual_token_num: bool = False,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
+        self.last_visual_token_num = 0
         position_ids = kwargs.pop("position_ids", None)
         attention_mask = kwargs.pop("attention_mask", None)
         if "inputs_embeds" in kwargs:
@@ -169,7 +170,6 @@ class LlavaMptForCausalLM(MptForCausalLM, LlavaMetaForCausalLM):
             )
         else:
             inputs_embeds = self.get_model().embed_tokens(inputs)
-            self.last_visual_token_num = 0
 
         outputs = super().generate(
             attention_mask=attention_mask,
@@ -177,7 +177,6 @@ class LlavaMptForCausalLM(MptForCausalLM, LlavaMetaForCausalLM):
             **kwargs,
         )
         del position_ids
-        print(f"last_visual_token_num = {self.last_visual_token_num}")
         if return_visual_token_num:
             return outputs, self.last_visual_token_num
         return outputs
