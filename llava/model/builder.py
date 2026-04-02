@@ -23,10 +23,10 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, BitsAn
 from llava.constants import DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN
 from llava.model import *
 from llava.model.multimodal_projector.builder import build_vision_projector
-from llava.model.quantization import enable_custom_bitsandbytes
+from llava.model.quantization import enable_local_bitsandbytes
 
 
-enable_custom_bitsandbytes()
+enable_local_bitsandbytes()
 
 
 def _load_torch_weights(model_path, filename):
@@ -83,25 +83,10 @@ def load_pretrained_model(
     visual_token_num = kwargs.pop("visual_token_num", None)
 
     kwargs = {"device_map": device_map, **kwargs}
-    manual_quantized_cuda_load = (
-        (load_4bit or load_8bit)
-        and isinstance(device, str)
-        and device.startswith("cuda")
-        and device != "cuda"
-    )
 
     if device != "cuda":
-        if manual_quantized_cuda_load:
-            # Older custom bitsandbytes builds do not support the `.to(device)` path
-            # that accelerate dispatches for single-device quantized loads. In
-            # multi-process evaluation we already bind the current CUDA device via
-            # `torch.cuda.set_device(local_rank)`, so letting from_pretrained load on
-            # the current device without accelerate dispatch avoids that failure.
-            kwargs["device_map"] = None
-        else:
-            kwargs["device_map"] = {"": device}
+        kwargs["device_map"] = {"": device}
     resolved_device_map = kwargs.get("device_map")
-    low_cpu_mem_usage = not manual_quantized_cuda_load
 
     if load_8bit:
         kwargs["load_in_8bit"] = True
@@ -137,7 +122,7 @@ def load_pretrained_model(
             print("Loading LLaVA from base model...")
             model = LlavaLlamaForCausalLM.from_pretrained(
                 model_base,
-                low_cpu_mem_usage=low_cpu_mem_usage,
+                low_cpu_mem_usage=True,
                 config=lora_cfg_pretrained,
                 **llava_kwargs,
             )
@@ -182,7 +167,7 @@ def load_pretrained_model(
                 cfg_pretrained = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
                 model = LlavaMptForCausalLM.from_pretrained(
                     model_base,
-                    low_cpu_mem_usage=low_cpu_mem_usage,
+                    low_cpu_mem_usage=True,
                     config=cfg_pretrained,
                     **llava_kwargs,
                 )
@@ -191,7 +176,7 @@ def load_pretrained_model(
                 cfg_pretrained = AutoConfig.from_pretrained(model_path)
                 model = LlavaMistralForCausalLM.from_pretrained(
                     model_base,
-                    low_cpu_mem_usage=low_cpu_mem_usage,
+                    low_cpu_mem_usage=True,
                     config=cfg_pretrained,
                     **llava_kwargs,
                 )
@@ -200,7 +185,7 @@ def load_pretrained_model(
                 cfg_pretrained = AutoConfig.from_pretrained(model_path)
                 model = LlavaLlamaForCausalLM.from_pretrained(
                     model_base,
-                    low_cpu_mem_usage=low_cpu_mem_usage,
+                    low_cpu_mem_usage=True,
                     config=cfg_pretrained,
                     **llava_kwargs,
                 )
@@ -211,14 +196,14 @@ def load_pretrained_model(
                 tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True)
                 model = LlavaMptForCausalLM.from_pretrained(
                     model_path,
-                    low_cpu_mem_usage=low_cpu_mem_usage,
+                    low_cpu_mem_usage=True,
                     **llava_kwargs,
                 )
             elif "mistral" in model_name.lower():
                 tokenizer = AutoTokenizer.from_pretrained(model_path)
                 model = LlavaMistralForCausalLM.from_pretrained(
                     model_path,
-                    low_cpu_mem_usage=low_cpu_mem_usage,
+                    low_cpu_mem_usage=True,
                     sliding_window=4096,
                     **llava_kwargs,
                 )
@@ -226,7 +211,7 @@ def load_pretrained_model(
                 tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
                 model = LlavaLlamaForCausalLM.from_pretrained(
                     model_path,
-                    low_cpu_mem_usage=low_cpu_mem_usage,
+                    low_cpu_mem_usage=True,
                     **llava_kwargs,
                 )
 
@@ -239,7 +224,7 @@ def load_pretrained_model(
             tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
             model = AutoModelForCausalLM.from_pretrained(
                 model_base,
-                low_cpu_mem_usage=low_cpu_mem_usage,
+                low_cpu_mem_usage=True,
                 **kwargs,
             )
             print(f"Loading LoRA weights from {model_path}")
@@ -253,7 +238,7 @@ def load_pretrained_model(
                 tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True)
                 model = AutoModelForCausalLM.from_pretrained(
                     model_path,
-                    low_cpu_mem_usage=low_cpu_mem_usage,
+                    low_cpu_mem_usage=True,
                     trust_remote_code=True,
                     **kwargs,
                 )
@@ -261,7 +246,7 @@ def load_pretrained_model(
                 tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
                 model = AutoModelForCausalLM.from_pretrained(
                     model_path,
-                    low_cpu_mem_usage=low_cpu_mem_usage,
+                    low_cpu_mem_usage=True,
                     **kwargs,
                 )
 
@@ -283,8 +268,6 @@ def load_pretrained_model(
             vision_tower.load_text_tower(device_map=resolved_device_map)
         if isinstance(resolved_device_map, str) and resolved_device_map != "auto":
             vision_tower.to(device=resolved_device_map, dtype=torch.float16)
-        elif resolved_device_map is None and device != "cuda":
-            vision_tower.to(device=device, dtype=torch.float16)
         elif isinstance(resolved_device_map, dict) and device != "cuda":
             vision_tower.to(device=device, dtype=torch.float16)
         image_processor = vision_tower.image_processor

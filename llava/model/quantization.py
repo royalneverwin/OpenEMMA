@@ -4,26 +4,26 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 
-def resolve_custom_bitsandbytes_root() -> Path:
-    return Path(__file__).resolve().parents[2] / "custom_bitsandbytes"
+def resolve_local_bitsandbytes_root() -> Path:
+    return Path(__file__).resolve().parents[2] / "bitsandbytes"
 
 
-def enable_custom_bitsandbytes() -> Optional[Path]:
-    custom_bnb_root = resolve_custom_bitsandbytes_root()
-    if not custom_bnb_root.exists():
+def enable_local_bitsandbytes() -> Optional[Path]:
+    local_bnb_root = resolve_local_bitsandbytes_root()
+    if not local_bnb_root.exists():
         warnings.warn(
-            f"Custom bitsandbytes root not found: {custom_bnb_root}. "
+            f"Local bitsandbytes root not found: {local_bnb_root}. "
             "Falling back to the installed bitsandbytes package."
         )
         return None
 
-    custom_bnb_root_str = str(custom_bnb_root)
-    if custom_bnb_root_str not in sys.path:
-        sys.path.insert(0, custom_bnb_root_str)
-    return custom_bnb_root
+    local_bnb_root_str = str(local_bnb_root)
+    if local_bnb_root_str not in sys.path:
+        sys.path.insert(0, local_bnb_root_str)
+    return local_bnb_root
 
 
-enable_custom_bitsandbytes()
+enable_local_bitsandbytes()
 
 
 def iter_quant_act_modules(model) -> Iterable[object]:
