@@ -202,7 +202,8 @@ class Params4bit(torch.nn.Parameter):
 
             return new_param
 
-count_block, count_layer = 1, 0
+llama_count_block, llama_count_layer = 1, 0
+vision_count_block, vision_count_layer = 1, 0
 class Linear4bit(nn.Linear):
     def __init__(self, input_features, output_features, bias=True, compute_dtype=None, compress_statistics=True, quant_type='fp4',device=None):
         super().__init__(input_features, output_features, bias, device)
@@ -212,23 +213,29 @@ class Linear4bit(nn.Linear):
         self.compute_dtype = compute_dtype
         self.compute_type_is_set = False
         self.activation_bit = 4
-        # self.llama_layer = True
-        global count_block, count_layer
-        if input_features == 1024 or (input_features == 4096 and output_features == 1024): # 或者用bias来判断
-            # CLIP+mm_projector
-            count_layer += 1
-            if count_layer == 7:
-                count_layer = 1
-                count_block += 1
+        is_vision_side = (
+            input_features == 1024
+            or output_features == 768
+            or (bias and input_features == 4096 and output_features in (1024, 4096))
+        )
+
+        global llama_count_block, llama_count_layer, vision_count_block, vision_count_layer
+        if is_vision_side:
+            vision_count_layer += 1
+            if vision_count_layer == 7:
+                vision_count_layer = 1
+                vision_count_block += 1
             self.llama_layer = False
+            self.count_block = vision_count_block
+            self.count_layer = vision_count_layer
         else:
-            count_layer += 1
-            if count_layer == 8:
-                count_layer = 1
-                count_block += 1
+            llama_count_layer += 1
+            if llama_count_layer == 8:
+                llama_count_layer = 1
+                llama_count_block += 1
             self.llama_layer = True
-        self.count_block = count_block
-        self.count_layer = count_layer
+            self.count_block = llama_count_block
+            self.count_layer = llama_count_layer
         self.quant_activation = QuantAct(activation_bit=self.activation_bit, input_dim=input_features, llama_layer=self.llama_layer,
                                          count_block=self.count_block, count_layer=self.count_layer)
         # print("*********************************************")

@@ -29,7 +29,7 @@ from .quant_utils import *
 import sys
 
 last_layer_entropy = 0
-last_layer_distribution = torch.Tensor(np.zeros([1,100,4096])).cuda()
+last_layer_distribution = None
 llama_entropy = []
 llama_distribution = []
 
@@ -66,17 +66,12 @@ class QuantAct(Module):
         self.sample_num = 0
         self.last_entropy = 0
         self.first_search = True
-        if self.llama_layer == True:
-            # llama calibrate search
-            self.llama_range_min = torch.Tensor(-self.init_range * np.zeros(self.dim)).cuda()
-            self.llama_range_max = torch.Tensor(self.init_range * np.zeros(self.dim)).cuda()
-        else:
-            # CLIP calibrate search
-            CLIP_row_dim = 257 # v1.3
-            # CLIP_row_dim = 577 # v1.5 (position_embedding): Embedding(577, 1024)
-            self.CLIP_range_min = torch.Tensor(-self.init_range * np.zeros(CLIP_row_dim)).cuda()
-            self.CLIP_range_max = torch.Tensor(self.init_range * np.zeros(CLIP_row_dim)).cuda()
-
+        self.register_buffer("llama_range_min", torch.zeros(self.dim, dtype=torch.float32), persistent=False)
+        self.register_buffer("llama_range_max", torch.zeros(self.dim, dtype=torch.float32), persistent=False)
+        self.register_buffer("CLIP_range_min", torch.zeros(0, dtype=torch.float32), persistent=False)
+        self.register_buffer("CLIP_range_max", torch.zeros(0, dtype=torch.float32), persistent=False)
+        self.register_buffer("activation_range_min", torch.zeros(0, dtype=torch.float32), persistent=False)
+        self.register_buffer("activation_range_max", torch.zeros(0, dtype=torch.float32), persistent=False)
 
         self.group_num = 8
 
@@ -89,8 +84,40 @@ class QuantAct(Module):
 
     def set_search(self, search=True):
         self.search = search
+
+    def _ensure_llama_range_buffers(self, inputs):
+        target_dim = inputs.shape[-1]
+        if self.llama_range_min.numel() != target_dim or self.llama_range_min.device != inputs.device:
+            self.llama_range_min = torch.zeros(target_dim, device=inputs.device, dtype=torch.float32)
+            self.llama_range_max = torch.zeros(target_dim, device=inputs.device, dtype=torch.float32)
+
+    def _ensure_clip_range_buffers(self, inputs):
+        target_dim = inputs.shape[1]
+        if self.CLIP_range_min.numel() != target_dim or self.CLIP_range_min.device != inputs.device:
+            self.CLIP_range_min = torch.zeros(target_dim, device=inputs.device, dtype=torch.float32)
+            self.CLIP_range_max = torch.zeros(target_dim, device=inputs.device, dtype=torch.float32)
+
+    def _ensure_activation_range_buffers(self, current_min, current_max):
+        target_dim = current_min.numel()
+        if self.activation_range_min.numel() != target_dim or self.activation_range_min.device != current_min.device:
+            self.activation_range_min = current_min.detach().to(dtype=torch.float32)
+            self.activation_range_max = current_max.detach().to(dtype=torch.float32)
+            return
+
+        self.activation_range_min = torch.minimum(self.activation_range_min, current_min.to(dtype=torch.float32))
+        self.activation_range_max = torch.maximum(self.activation_range_max, current_max.to(dtype=torch.float32))
     
     def quantization(self, inputs, quantization_min, quantization_max):
+        if isinstance(quantization_min, torch.Tensor):
+            quantization_min = quantization_min.to(device=inputs.device)
+            quantization_max = quantization_max.to(device=inputs.device)
+            degenerate_mask = (quantization_max - quantization_min).abs() < 1e-8
+            if degenerate_mask.any():
+                quantization_max = torch.where(
+                    degenerate_mask,
+                    quantization_min + 1e-8,
+                    quantization_max,
+                )
         scale, zero_point = asymmetric_linear_quantization_params(
             self.activation_bit, quantization_min , quantization_max
         )
@@ -132,7 +159,9 @@ class QuantAct(Module):
     def search_strategy_judge(self):
         self.sample_num += 1
         global last_layer_entropy, llama_entropy
-        if last_layer_entropy >= np.mean(llama_entropy) or self.count_block % 3 == 1:
+        if len(llama_entropy) == 0:
+            search_flag = True
+        elif last_layer_entropy >= np.mean(llama_entropy) or self.count_block % 3 == 1:
             search_flag = True
         else:
             search_flag = False
@@ -145,6 +174,7 @@ class QuantAct(Module):
 
     def calibrate_quantization(self, inputs, init_min=-6, init_max=6):
         if self.llama_layer == True:
+            self._ensure_llama_range_buffers(inputs)
             self.search_flag = self.search_strategy_judge()
                 
             if self.search_flag:
@@ -157,7 +187,12 @@ class QuantAct(Module):
 
             quant_act = self.quantization(inputs, self.llama_range_min, self.llama_range_max)
             global last_layer_entropy, last_layer_distribution
-            if self.count_layer == 1 or self.count_layer == 7:
+            if (
+                self.count_layer == 1
+                or self.count_layer == 7
+                or last_layer_distribution is None
+                or last_layer_distribution.shape != quant_act.abs().shape
+            ):
                 last_layer_entropy = self.cal_entropy(quant_act.abs())
             else:
                 last_layer_entropy = self.compute_DED(last_layer_distribution, quant_act.abs())
@@ -168,6 +203,7 @@ class QuantAct(Module):
 
             return quant_act
         else:
+            self._ensure_clip_range_buffers(inputs)
             # row-wise search
             x_min = torch.min(inputs, dim=-1)[0].squeeze(dim=0)
             x_max = torch.max(inputs, dim=-1)[0].squeeze(dim=0)
@@ -245,17 +281,16 @@ class QuantAct(Module):
 
         if inputs_calibrate.shape[1] == 1:
             # row-wise  (1, 109, 4096) (1, 109) (8, 1, 4096)
-            activation_catrange_min = torch.cat([self.activation_range_min.unsqueeze(dim=0), inputs_calibrate.squeeze(dim=0)], dim=0)
-            activation_catrange_max = torch.cat([self.activation_range_max.unsqueeze(dim=0), inputs_calibrate.squeeze(dim=0)], dim=0)
-            
-            self.activation_range_min = torch.min(activation_catrange_min, dim=0)[0].squeeze(dim=0)
-            self.activation_range_max = torch.max(activation_catrange_max, dim=0)[0].squeeze(dim=0)
+            current_min = inputs_calibrate.squeeze(dim=0).min(dim=0)[0]
+            current_max = inputs_calibrate.squeeze(dim=0).max(dim=0)[0]
+            self._ensure_activation_range_buffers(current_min, current_max)
             quant_act = self.quantization(x, self.activation_range_min , self.activation_range_max)
 
             return quant_act
         else:
             # row-wise  (1, 109, 4096) (1, 109)
             if self.llama_layer == True:
+                self._ensure_llama_range_buffers(inputs_calibrate)
                 # channel-wise
                 if self.dim != 4096 or self.count_layer == 4: 
                     self.llama_range_min1 = torch.min(inputs_calibrate, dim=1)[0].squeeze(dim=0)
@@ -272,6 +307,7 @@ class QuantAct(Module):
                 return quant_act
             else:
                 # row-wise
+                self._ensure_clip_range_buffers(inputs_calibrate)
                 quant_act = self.quantization(x, self.CLIP_range_min , self.CLIP_range_max)
                 return quant_act
 
