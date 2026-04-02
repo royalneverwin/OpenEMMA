@@ -97,14 +97,15 @@ class CLIPVisionTower(nn.Module):
                 "Text tower is not loaded. Call `load_text_tower` before using QAPruner/CDPruner."
             )
 
-        text_inputs = self.text_tokenizer(text=texts, return_tensors="pt", padding=True)
-        text_segment_count = (text_inputs.input_ids.shape[1] - 1) // self.max_position_embeddings + 1
-        text_padding = self.max_position_embeddings * text_segment_count - text_inputs.input_ids.shape[1]
+        text_inputs = self.text_tokenizer(
+            text=texts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=self.max_position_embeddings,
+        )
         text_inputs = {
-            key: torch.cat(
-                [value, value.new_zeros((value.shape[0], text_padding))],
-                dim=1,
-            ).reshape(-1, self.max_position_embeddings).to(device=self.text_tower.device)
+            key: value.to(device=self.text_tower.device)
             for key, value in text_inputs.items()
         }
         return self.text_tower(**text_inputs).text_embeds

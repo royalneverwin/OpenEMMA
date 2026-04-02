@@ -47,6 +47,11 @@ OBS_LEN = 10
 FUT_LEN = 10
 TTL_LEN = OBS_LEN + FUT_LEN
 
+QAPRUNER_TEXT_SCENE = "Driving scene: lights, vehicles, pedestrians, lane markings."
+QAPRUNER_TEXT_OBJECTS = "Important road users and their image locations."
+QAPRUNER_TEXT_INTENT = "Ego driving intent from lanes and traffic."
+QAPRUNER_TEXT_MOTION = "Scene and ego motion for next driving action."
+
 
 def str2bool(value):
     if isinstance(value, bool):
@@ -273,14 +278,14 @@ def prepare_llava_inputs(text, image_path, processor, tokenizer, model, args):
     return input_ids, image_tensor, image.size, pruning_text
 
 
-def build_llava_generate_kwargs(pruning_text, tokenizer, args, **overrides):
+def build_llava_generate_kwargs(pruning_text, tokenizer, args, qapruner_text=None, enable_qapruner=True, **overrides):
     generate_kwargs = {
         "use_cache": True,
         "pad_token_id": tokenizer.eos_token_id,
     }
-    if getattr(args, "visual_token_num", None):
+    if getattr(args, "visual_token_num", None) and enable_qapruner:
         generate_kwargs.update(
-            texts=pruning_text,
+            texts=qapruner_text or pruning_text,
             add_quant=args.add_quant,
             alpha=args.alpha,
             dynamic_alpha=args.dynamic_alpha,
@@ -304,6 +309,8 @@ def generate_llava_text(
     temperature=0.2,
     top_p=None,
     num_beams=1,
+    qapruner_text=None,
+    enable_qapruner=True,
 ):
     input_ids, image_tensor, image_size, pruning_text = prepare_llava_inputs(
         text,
@@ -317,6 +324,8 @@ def generate_llava_text(
         pruning_text,
         tokenizer,
         args,
+        qapruner_text=qapruner_text,
+        enable_qapruner=enable_qapruner,
         do_sample=do_sample,
         temperature=temperature,
         top_p=top_p,
@@ -453,6 +462,7 @@ def run_scene_quant_calibration(
             temperature=0.0,
             top_p=None,
             num_beams=1,
+            enable_qapruner=False,
         )
 
         state["prompt_index"] += 1
@@ -481,7 +491,7 @@ def run_scene_quant_calibration(
         save_calibration_summary(state)
 
 
-def vlm_inference(text=None, images=None, sys_message=None, processor=None, model=None, tokenizer=None, args=None):
+def vlm_inference(text=None, images=None, sys_message=None, processor=None, model=None, tokenizer=None, args=None, qapruner_text=None):
     del sys_message
 
     if "llama" in args.model_path or "Llama" in args.model_path:
@@ -544,6 +554,7 @@ def vlm_inference(text=None, images=None, sys_message=None, processor=None, mode
             temperature=0.2,
             top_p=None,
             num_beams=1,
+            qapruner_text=qapruner_text,
         )
 
     if "gpt" in args.model_path:
@@ -574,7 +585,15 @@ def SceneDescription(obs_images, processor=None, model=None, tokenizer=None, arg
         "Provide a concise description of the driving scene according to traffic lights, movements of other "
         "cars or pedestrians and lane markings."
     )
-    return vlm_inference(text=prompt, images=obs_images, processor=processor, model=model, tokenizer=tokenizer, args=args)
+    return vlm_inference(
+        text=prompt,
+        images=obs_images,
+        processor=processor,
+        model=model,
+        tokenizer=tokenizer,
+        args=args,
+        qapruner_text=QAPRUNER_TEXT_SCENE,
+    )
 
 
 def DescribeObjects(obs_images, processor=None, model=None, tokenizer=None, args=None):
@@ -584,7 +603,15 @@ def DescribeObjects(obs_images, processor=None, model=None, tokenizer=None, args
         "What other road users should you pay attention to in the driving scene? List two or three of them, "
         "specifying the location within the image and a short description of what each road user is doing."
     )
-    return vlm_inference(text=prompt, images=obs_images, processor=processor, model=model, tokenizer=tokenizer, args=args)
+    return vlm_inference(
+        text=prompt,
+        images=obs_images,
+        processor=processor,
+        model=model,
+        tokenizer=tokenizer,
+        args=args,
+        qapruner_text=QAPRUNER_TEXT_OBJECTS,
+    )
 
 
 def DescribeOrUpdateIntent(obs_images, prev_intent=None, processor=None, model=None, tokenizer=None, args=None):
@@ -602,7 +629,15 @@ def DescribeOrUpdateIntent(obs_images, prev_intent=None, processor=None, model=N
             f"Half a second ago your intent was to {prev_intent}. Based on the updated lane markings and "
             "the updated movement of other cars and pedestrians, provide a concise explanation of your current intent."
         )
-    return vlm_inference(text=prompt, images=obs_images, processor=processor, model=model, tokenizer=tokenizer, args=args)
+    return vlm_inference(
+        text=prompt,
+        images=obs_images,
+        processor=processor,
+        model=model,
+        tokenizer=tokenizer,
+        args=args,
+        qapruner_text=QAPRUNER_TEXT_INTENT,
+    )
 
 
 def GenerateMotion(obs_images, obs_waypoints, obs_velocities, obs_curvatures, given_intent, processor=None, model=None, tokenizer=None, args=None):
@@ -658,6 +693,7 @@ def GenerateMotion(obs_images, obs_waypoints, obs_velocities, obs_curvatures, gi
             model=model,
             tokenizer=tokenizer,
             args=args,
+            qapruner_text=QAPRUNER_TEXT_MOTION,
         )
         if "unable" not in result and "sorry" not in result and "[" in result:
             break

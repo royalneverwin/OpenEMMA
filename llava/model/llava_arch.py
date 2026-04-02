@@ -278,6 +278,13 @@ class LlavaMetaForCausalLM(ABC):
                 if text_embeds.shape[0] == 1 and batch_size > 1:
                     text_embeds = text_embeds.expand(batch_size, -1)
                 elif text_embeds.shape[0] != batch_size:
+                    print(
+                        "QAPruner text/image batch mismatch: "
+                        f"text_embeds.shape={tuple(text_embeds.shape)}, "
+                        f"image_embeds.shape={tuple(image_embeds.shape)}, "
+                        f"image_features.shape={tuple(image_features.shape)}, "
+                        f"batch_size={batch_size}, texts={texts}"
+                    )
                     raise ValueError(
                         "Text embedding batch size does not match image batch size: "
                         f"{text_embeds.shape[0]} vs {batch_size}"
