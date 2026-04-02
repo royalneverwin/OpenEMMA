@@ -46,7 +46,7 @@ class ModelWorker:
                  worker_id, no_register,
                  model_path, model_base, model_name,
                  load_8bit, load_4bit, device, use_flash_attn=False,
-                 visual_token_num=None, use_qvlm_custom_bnb=False, custom_bnb_path=None):
+                 visual_token_num=None):
         self.controller_addr = controller_addr
         self.worker_addr = worker_addr
         self.worker_id = worker_id
@@ -67,9 +67,7 @@ class ModelWorker:
         self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
             model_path, model_base, self.model_name, load_8bit, load_4bit,
             device=self.device, use_flash_attn=use_flash_attn,
-            visual_token_num=visual_token_num,
-            use_qvlm_custom_bnb=use_qvlm_custom_bnb,
-            custom_bnb_path=custom_bnb_path)
+            visual_token_num=visual_token_num)
         self.is_multimodal = 'llava' in self.model_name.lower()
 
         if not no_register:
@@ -289,8 +287,6 @@ if __name__ == "__main__":
     parser.add_argument("--load-4bit", action="store_true")
     parser.add_argument("--use-flash-attn", action="store_true")
     parser.add_argument("--visual-token-num", type=int, default=None)
-    parser.add_argument("--use-qvlm-custom-bnb", action="store_true")
-    parser.add_argument("--custom-bnb-path", type=str, default=None)
     args = parser.parse_args()
     logger.info(f"args: {args}")
 
@@ -308,7 +304,5 @@ if __name__ == "__main__":
                          args.load_4bit,
                          args.device,
                          use_flash_attn=args.use_flash_attn,
-                         visual_token_num=args.visual_token_num,
-                         use_qvlm_custom_bnb=args.use_qvlm_custom_bnb,
-                         custom_bnb_path=args.custom_bnb_path)
+                         visual_token_num=args.visual_token_num)
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")

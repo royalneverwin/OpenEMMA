@@ -4,23 +4,15 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 
-def resolve_qvlm_custom_bitsandbytes_root(custom_bnb_path: Optional[str] = None) -> Path:
-    if custom_bnb_path:
-        return Path(custom_bnb_path).expanduser().resolve()
+def resolve_custom_bitsandbytes_root() -> Path:
     return Path(__file__).resolve().parents[2] / "custom_bitsandbytes"
 
 
-def maybe_enable_qvlm_custom_bitsandbytes(
-    enable: bool = False,
-    custom_bnb_path: Optional[str] = None,
-) -> Optional[Path]:
-    if not enable:
-        return None
-
-    custom_bnb_root = resolve_qvlm_custom_bitsandbytes_root(custom_bnb_path)
+def enable_custom_bitsandbytes() -> Optional[Path]:
+    custom_bnb_root = resolve_custom_bitsandbytes_root()
     if not custom_bnb_root.exists():
         warnings.warn(
-            f"QVLM custom bitsandbytes root not found: {custom_bnb_root}. "
+            f"Custom bitsandbytes root not found: {custom_bnb_root}. "
             "Falling back to the installed bitsandbytes package."
         )
         return None
@@ -29,6 +21,9 @@ def maybe_enable_qvlm_custom_bitsandbytes(
     if custom_bnb_root_str not in sys.path:
         sys.path.insert(0, custom_bnb_root_str)
     return custom_bnb_root
+
+
+enable_custom_bitsandbytes()
 
 
 def iter_quant_act_modules(model) -> Iterable[object]:

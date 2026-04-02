@@ -11,8 +11,6 @@ CONV_MODE="${CONV_MODE:-mistral_instruct}"
 
 LOAD_4BIT="${LOAD_4BIT:-1}"
 LOAD_8BIT="${LOAD_8BIT:-0}"
-USE_QVLM_CUSTOM_BNB="${USE_QVLM_CUSTOM_BNB:-1}"
-CUSTOM_BNB_PATH="${CUSTOM_BNB_PATH:-$REPO_ROOT/custom_bitsandbytes}"
 
 VISUAL_TOKEN_NUM="${VISUAL_TOKEN_NUM:-128}"
 ADD_QUANT="${ADD_QUANT:-1}"
@@ -42,8 +40,6 @@ Options:
   --conv-mode VALUE
   --load-4bit / --no-load-4bit
   --load-8bit / --no-load-8bit
-  --use-qvlm-custom-bnb / --no-use-qvlm-custom-bnb
-  --custom-bnb-path PATH
   --visual-token-num VALUE
   --add-quant / --no-add-quant
   --alpha VALUE
@@ -100,19 +96,6 @@ while [[ $# -gt 0 ]]; do
     --no-load-8bit)
       LOAD_8BIT=0
       shift
-      ;;
-    --use-qvlm-custom-bnb)
-      USE_QVLM_CUSTOM_BNB=1
-      shift
-      ;;
-    --no-use-qvlm-custom-bnb)
-      USE_QVLM_CUSTOM_BNB=0
-      shift
-      ;;
-    --custom-bnb-path)
-      require_value "$1" "${2:-}"
-      CUSTOM_BNB_PATH="$2"
-      shift 2
       ;;
     --visual-token-num)
       require_value "$1" "${2:-}"
@@ -178,7 +161,6 @@ CMD=(
   --alpha "$ALPHA"
   --quant-method "$QUANT_METHOD"
   --pruning-method "$PRUNING_METHOD"
-  --custom-bnb-path "$CUSTOM_BNB_PATH"
 )
 
 if [[ "$LOAD_4BIT" == "1" ]]; then
@@ -187,10 +169,6 @@ fi
 
 if [[ "$LOAD_8BIT" == "1" ]]; then
   CMD+=(--load-8bit)
-fi
-
-if [[ "$USE_QVLM_CUSTOM_BNB" == "1" ]]; then
-  CMD+=(--use-qvlm-custom-bnb)
 fi
 
 if [[ "$ADD_QUANT" == "1" ]]; then

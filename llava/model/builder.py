@@ -23,7 +23,10 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, BitsAn
 from llava.constants import DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN
 from llava.model import *
 from llava.model.multimodal_projector.builder import build_vision_projector
-from llava.model.quantization import maybe_enable_qvlm_custom_bitsandbytes
+from llava.model.quantization import enable_custom_bitsandbytes
+
+
+enable_custom_bitsandbytes()
 
 
 def _load_torch_weights(model_path, filename):
@@ -78,14 +81,6 @@ def load_pretrained_model(
     **kwargs,
 ):
     visual_token_num = kwargs.pop("visual_token_num", None)
-    use_qvlm_custom_bnb = kwargs.pop("use_qvlm_custom_bnb", False)
-    custom_bnb_path = kwargs.pop("custom_bnb_path", None)
-
-    if load_8bit or load_4bit:
-        maybe_enable_qvlm_custom_bitsandbytes(
-            enable=use_qvlm_custom_bnb,
-            custom_bnb_path=custom_bnb_path,
-        )
 
     kwargs = {"device_map": device_map, **kwargs}
 

@@ -203,8 +203,6 @@ def load_requested_model_on_device(args, device):
             load_4bit=args.load_4bit,
             use_flash_attn=args.use_flash_attn,
             visual_token_num=args.visual_token_num,
-            use_qvlm_custom_bnb=args.use_qvlm_custom_bnb,
-            custom_bnb_path=args.custom_bnb_path,
             device=device,
         )
     elif "llava" in args.model_path:
@@ -218,8 +216,6 @@ def load_requested_model_on_device(args, device):
             load_4bit=args.load_4bit,
             use_flash_attn=args.use_flash_attn,
             visual_token_num=args.visual_token_num,
-            use_qvlm_custom_bnb=args.use_qvlm_custom_bnb,
-            custom_bnb_path=args.custom_bnb_path,
             device=device,
         )
     else:
@@ -469,8 +465,6 @@ def main():
     parser.add_argument("--method", type=str, default="openemma")
     parser.add_argument("--load-8bit", action="store_true")
     parser.add_argument("--load-4bit", action="store_true")
-    parser.add_argument("--use-qvlm-custom-bnb", action="store_true")
-    parser.add_argument("--custom-bnb-path", type=str, default=None)
     parser.add_argument("--use-flash-attn", action="store_true")
     parser.add_argument("--visual-token-num", type=int, default=None)
     parser.add_argument("--add-quant", action="store_true")

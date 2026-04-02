@@ -37,8 +37,6 @@ def main(args):
         args.load_4bit,
         device=args.device,
         visual_token_num=args.visual_token_num,
-        use_qvlm_custom_bnb=args.use_qvlm_custom_bnb,
-        custom_bnb_path=args.custom_bnb_path,
     )
 
     if "llama-2" in model_name.lower():
@@ -144,8 +142,6 @@ if __name__ == "__main__":
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--load-8bit", action="store_true")
     parser.add_argument("--load-4bit", action="store_true")
-    parser.add_argument("--use-qvlm-custom-bnb", action="store_true")
-    parser.add_argument("--custom-bnb-path", type=str, default=None)
     parser.add_argument("--visual-token-num", type=int, default=None)
     parser.add_argument("--add-quant", action="store_true")
     parser.add_argument("--alpha", type=float, default=0.7)
