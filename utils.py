@@ -192,16 +192,24 @@ def OffsetTrajectory3D(points, offset_distance):
     Returns:
         np.ndarray: Offset trajectory as an n x 3 array.
     """
+    points = np.asarray(points)
+    if len(points) < 2:
+        return points.copy()
+
     # Compute differences to find tangent vectors
     tangents = np.gradient(points, axis=0)  # Approximate tangents
-    tangents /= np.linalg.norm(tangents, axis=1, keepdims=True)  # Normalize tangents
+    tangent_norms = np.linalg.norm(tangents, axis=1, keepdims=True)
+    tangent_norms[tangent_norms == 0] = 1.0
+    tangents /= tangent_norms  # Normalize tangents
 
     # Reference vector for normal plane computation (e.g., z-axis)
     reference_vector = np.array([0, 0, 1])
 
     # Compute normal vectors via cross product
     normals = np.cross(tangents, reference_vector)
-    normals /= np.linalg.norm(normals, axis=1, keepdims=True)  # Normalize normals
+    normal_norms = np.linalg.norm(normals, axis=1, keepdims=True)
+    normal_norms[normal_norms == 0] = 1.0
+    normals /= normal_norms  # Normalize normals
 
     # Compute offset points
     offset_points = points + offset_distance * normals
@@ -209,10 +217,18 @@ def OffsetTrajectory3D(points, offset_distance):
     return offset_points
 
 def OverlayTrajectory(img, points3d_world: list, cam_to_ego, ego_to_world, color=(0, 0, 255), args=None):
+    points3d_world = np.asarray(points3d_world)
+    if len(points3d_world) == 0:
+        return True
+    if len(points3d_world) == 1:
+        points3d_img = ProjectWorldToImage(points3d_world.tolist(), cam_to_ego, ego_to_world)
+        if args.plot and len(points3d_img) > 0:
+            cv2.circle(img, tuple(points3d_img[0].astype(int)), radius=6, color=color, thickness=-1)
+        return False
 
     # Construct left/right boundaries.
-    points3d_left_world = OffsetTrajectory3D(np.array(points3d_world), -1.73 / 2)
-    points3d_right_world = OffsetTrajectory3D(np.array(points3d_world), 1.73 / 2)
+    points3d_left_world = OffsetTrajectory3D(points3d_world, -1.73 / 2)
+    points3d_right_world = OffsetTrajectory3D(points3d_world, 1.73 / 2)
 
     # Project the waypoints to the image.
     points3d_img = ProjectWorldToImage(points3d_world, cam_to_ego, ego_to_world)
