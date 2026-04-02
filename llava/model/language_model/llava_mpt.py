@@ -49,7 +49,6 @@ class LlavaMptForCausalLM(MptForCausalLM, LlavaMetaForCausalLM):
         self.lm_head = torch.nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         self.visual_token_num = visual_token_num
         self.last_visual_token_num = None
-        self.last_original_visual_token_num = None
 
         self.post_init()
 
@@ -170,7 +169,7 @@ class LlavaMptForCausalLM(MptForCausalLM, LlavaMetaForCausalLM):
             )
         else:
             inputs_embeds = self.get_model().embed_tokens(inputs)
-            self._record_visual_token_stats([0], [0])
+            self.last_visual_token_num = 0
 
         outputs = super().generate(
             attention_mask=attention_mask,
@@ -178,8 +177,7 @@ class LlavaMptForCausalLM(MptForCausalLM, LlavaMetaForCausalLM):
             **kwargs,
         )
         del position_ids
-        if images is not None:
-            self.print_last_visual_token_stats()
+        print(f"last_visual_token_num = {self.last_visual_token_num}")
         if return_visual_token_num:
             return outputs, self.last_visual_token_num
         return outputs
