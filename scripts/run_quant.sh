@@ -16,6 +16,7 @@ python main.py \
     --version "${VERSION}" \
     --method "${METHOD}" \
     --output-dir "${OUTPUT_DIR}" \
+    --load-4bit \
     --visual-token-num 32 \
     --add-quant \
     --pruning-method cdpruner \

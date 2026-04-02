@@ -3,7 +3,9 @@
 set -euo pipefail
 
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+
 DATAROOT=/mnt/bn/yufei1900/wangxinhao/paper/data/nuscenes
+VERSION=v1.0-trainval
 
 NPROC_PER_NODE="${NPROC_PER_NODE:-8}"
 MODEL_PATH="${MODEL_PATH:-/mnt/bn/yufei1900/wangxinhao/paper/checkpoint/llava-v1.6-mistral-7b}"
@@ -17,4 +19,5 @@ torchrun --nproc_per_node="${NPROC_PER_NODE}" main_multi.py \
     --version "${VERSION}" \
     --method "${METHOD}" \
     --output-dir ./output_multi \
+    --resume \
     "$@"
