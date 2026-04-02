@@ -85,8 +85,16 @@ def load_pretrained_model(
     kwargs = {"device_map": device_map, **kwargs}
 
     if device != "cuda":
-        kwargs["device_map"] = {"": device}
-    resolved_device_map = kwargs["device_map"]
+        if (load_4bit or load_8bit) and isinstance(device, str) and device.startswith("cuda"):
+            # Older custom bitsandbytes builds do not support the `.to(device)` path
+            # that accelerate dispatches for single-device quantized loads. In
+            # multi-process evaluation we already bind the current CUDA device via
+            # `torch.cuda.set_device(local_rank)`, so letting from_pretrained load on
+            # the current device without an explicit device_map avoids that failure.
+            kwargs.pop("device_map", None)
+        else:
+            kwargs["device_map"] = {"": device}
+    resolved_device_map = kwargs.get("device_map")
 
     if load_8bit:
         kwargs["load_in_8bit"] = True
