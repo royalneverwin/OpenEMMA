@@ -1,11 +1,9 @@
 import json
-import logging
 import shlex
 import subprocess
+from typing import Tuple
 
 import torch
-
-logger = logging.getLogger(__name__)
 
 
 def outlier_hook(module, input):
@@ -68,7 +66,7 @@ class OutlierTracer:
 
     def get_outliers(self, weight):
         if not self.is_initialized():
-            logger.warning("Outlier tracer is not initialized...")
+            print("Outlier tracer is not initialized...")
             return None
         hvalue = self.get_hvalue(weight)
         if hvalue in self.hvalue2outlier_idx:
@@ -87,6 +85,11 @@ def find_outlier_dims(weight, reduction_dim=0, zscore=4.0, topk=None, rdm=False)
     if rdm:
         return torch.randint(0, weight.shape[1], size=(topk,), device=weight.device).long()
 
+    m = weight.mean(reduction_dim)
+    mm = m.mean()
+    mstd = m.std()
+    zm = (m - mm) / mstd
+
     std = weight.std(reduction_dim)
     stdm = std.mean()
     stdstd = std.std()
@@ -94,14 +97,14 @@ def find_outlier_dims(weight, reduction_dim=0, zscore=4.0, topk=None, rdm=False)
     zstd = (std - stdm) / stdstd
 
     if topk is not None:
-        _, idx = torch.topk(std.abs(), k=topk, dim=0)
+        val, idx = torch.topk(std.abs(), k=topk, dim=0)
     else:
         idx = torch.where(zstd > zscore)[0]
 
     return idx
 
 
-def execute_and_return(command_string: str) -> tuple[str, str]:
+def execute_and_return(command_string: str) -> Tuple[str, str]:
     def _decode(subprocess_err_out_tuple):
         return tuple(to_decode.decode("UTF-8").strip() for to_decode in subprocess_err_out_tuple)
 
@@ -199,10 +202,3 @@ def unpack_tensor_to_dict(tensor_data):
 
 LINEAR_8BIT_WEIGHTS_FORMAT_MAPPING = {"row": 0, "col32": 1, "col_turing": 2, "col_ampere": 3}
 INVERSE_LINEAR_8BIT_WEIGHTS_FORMAT_MAPPING = {val: name for (name, val) in LINEAR_8BIT_WEIGHTS_FORMAT_MAPPING.items()}
-
-
-def sync_gpu(t: torch.Tensor):
-    if t.device.type == "cuda":
-        torch.cuda.synchronize()
-    elif t.device.type == "xpu":
-        torch.xpu.synchronize()

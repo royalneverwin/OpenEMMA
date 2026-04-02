@@ -2,13 +2,19 @@
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
-from distutils.errors import DistutilsModuleError
+import glob
 import os
-from warnings import warn
 
 from setuptools import find_packages, setup
-from setuptools.command.build_py import build_py
 from setuptools.dist import Distribution
+
+libs = list(glob.glob("./bitsandbytes/libbitsandbytes*.*"))
+libs = [os.path.basename(p) for p in libs]
+print("libs:", libs)
+
+
+def read(fname):
+    return open(os.path.join(os.path.dirname(__file__), fname)).read()
 
 
 # Tested with wheel v0.29.0
@@ -17,33 +23,27 @@ class BinaryDistribution(Distribution):
         return True
 
 
-class ExtBuildPy(build_py):
-    def run(self):
-        if os.environ.get("BNB_SKIP_CMAKE", "").lower() in ("1", "true", "yes"):
-            print("skipping CMake build")
-        else:
-            # build_cmake needs to be called prior to build_py, as the latter
-            # collects the files output into the package directory.
-            try:
-                self.run_command("build_cmake")
-            except DistutilsModuleError:
-                warn(
-                    "scikit-build-core not installed, CMake will not be invoked automatically. "
-                    "Please install scikit-build-core or run CMake manually to build extensions."
-                )
-        super().run()
-
-
-cmdclass = {"build_py": ExtBuildPy}
-
-setup_kwargs = {
-    "version": "0.50.0.dev0",
-    "packages": find_packages(),
-    "distclass": BinaryDistribution,
-    "cmdclass": {"build_py": ExtBuildPy},
-}
-
-if os.environ.get("BNB_SKIP_CMAKE", "").lower() not in ("1", "true", "yes"):
-    setup_kwargs["cmake_source_dir"] = "."
-
-setup(**setup_kwargs)
+setup(
+    name="bitsandbytes",
+    version="0.43.2",
+    author="Tim Dettmers",
+    author_email="dettmers@cs.washington.edu",
+    description="k-bit optimizers and matrix multiplication routines.",
+    license="MIT",
+    keywords="gpu optimizers optimization 8-bit quantization compression",
+    url="https://github.com/TimDettmers/bitsandbytes",
+    packages=find_packages(),
+    package_data={"": libs},
+    install_requires=["torch", "numpy"],
+    extras_require={
+        "benchmark": ["pandas", "matplotlib"],
+        "test": ["scipy"],
+    },
+    long_description=read("README.md"),
+    long_description_content_type="text/markdown",
+    classifiers=[
+        "Development Status :: 4 - Beta",
+        "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    ],
+    distclass=BinaryDistribution,
+)

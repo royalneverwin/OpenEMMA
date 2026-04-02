@@ -1,218 +1,29 @@
-<p align="center"><img src="https://avatars.githubusercontent.com/u/175231607?s=200&v=4" alt=""></p>
-<h1 align="center">bitsandbytes</h1>
-<p align="center">
-    <a href="https://github.com/bitsandbytes-foundation/bitsandbytes/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/bitsandbytes-foundation/bitsandbytes.svg?color=blue"></a>
-    <a href="https://pepy.tech/project/bitsandbytes"><img alt="Downloads" src="https://static.pepy.tech/badge/bitsandbytes/month"></a>
-    <a href="https://github.com/bitsandbytes-foundation/bitsandbytes/actions/workflows/tests-nightly.yml"><img alt="Nightly Unit Tests" src="https://img.shields.io/github/actions/workflow/status/bitsandbytes-foundation/bitsandbytes/tests-nightly.yml?logo=github&label=Nightly%20Tests"></a>
-    <a href="https://github.com/bitsandbytes-foundation/bitsandbytes/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/bitsandbytes-foundation/bitsandbytes"></a>
-    <a href="https://pypi.org/project/bitsandbytes/"><img alt="PyPI - Python Version" src="https://img.shields.io/pypi/pyversions/bitsandbytes"></a>
-</p>
+# `bitsandbytes`
 
-`bitsandbytes` enables accessible large language models via k-bit quantization for PyTorch. We provide three main features for dramatically reducing memory consumption for inference and training:
+[![Downloads](https://static.pepy.tech/badge/bitsandbytes)](https://pepy.tech/project/bitsandbytes) [![Downloads](https://static.pepy.tech/badge/bitsandbytes/month)](https://pepy.tech/project/bitsandbytes) [![Downloads](https://static.pepy.tech/badge/bitsandbytes/week)](https://pepy.tech/project/bitsandbytes)
 
-* 8-bit optimizers uses block-wise quantization to maintain 32-bit performance at a small fraction of the memory cost.
-* LLM.int8() or 8-bit quantization enables large language model inference with only half the required memory and without any performance degradation. This method is based on vector-wise quantization to quantize most features to 8-bits and separately treating outliers with 16-bit matrix multiplication.
-* QLoRA or 4-bit quantization enables large language model training with several memory-saving techniques that don't compromise performance. This method quantizes a model to 4-bits and inserts a small set of trainable low-rank adaptation (LoRA) weights to allow training.
+The `bitsandbytes` library is a lightweight Python wrapper around CUDA custom functions, in particular 8-bit optimizers, matrix multiplication (LLM.int8()), and 8 & 4-bit quantization functions.
 
 The library includes quantization primitives for 8-bit & 4-bit operations, through `bitsandbytes.nn.Linear8bitLt` and `bitsandbytes.nn.Linear4bit` and 8-bit optimizers through `bitsandbytes.optim` module.
 
-## System Requirements
-bitsandbytes has the following minimum requirements for all platforms:
+There are ongoing efforts to support further hardware backends, i.e. Intel CPU + GPU, AMD GPU, Apple Silicon. Windows support is quite far along and is on its way as well.
 
-* Python 3.10+
-* [PyTorch](https://pytorch.org/get-started/locally/) 2.3+
-  * _Note: While we aim to provide wide backwards compatibility, we recommend using the latest version of PyTorch for the best experience._
+**Please head to the official documentation page:**
 
-#### Accelerator support:
+**[https://huggingface.co/docs/bitsandbytes/main](https://huggingface.co/docs/bitsandbytes/main)**
 
-<small>Note: this table reflects the status of the current development branch. For the latest stable release, see the
-[document in the 0.49.2 tag](https://github.com/bitsandbytes-foundation/bitsandbytes/blob/0.49.2/README.md#accelerator-support).
-</small>
+## ALPHA TESTERS WANTED: `multi-backend-refactor` AMD GPU + Intel CPU/GPU specific BNB backend implementations
 
-##### Legend:
-🚧 = In Development,
-〰️ = Partially Supported,
-✅ = Supported,
-🐢 = Slow Implementation Supported,
-❌ = Not Supported
+We're in the process of a complex refactor in order to allow the support of additional hardware backends, other than CUDA, in BNB. The efforts around this are already quite far along and there's plenty of functionality already in place that is in need for users to take a hands-on approach! Mac support will likely soon also see progress. However, I recommend waiting 2 weeks until the device abstraction has further consolidated (**breaking changes upcoming**).
 
-<table>
-  <thead>
-    <tr>
-      <th>Platform</th>
-      <th>Accelerator</th>
-      <th>Hardware Requirements</th>
-      <th>LLM.int8()</th>
-      <th>QLoRA 4-bit</th>
-      <th>8-bit Optimizers</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td colspan="6">🐧 <strong>Linux, glibc >= 2.24</strong></td>
-    </tr>
-    <tr>
-      <td align="right">x86-64</td>
-      <td>◻️ CPU</td>
-      <td>Minimum: AVX2<br>Optimized: AVX512F, AVX512BF16</td>
-      <td>✅</td>
-      <td>✅</td>
-      <td>❌</td>
-    </tr>
-    <tr>
-      <td></td>
-      <td>🟩 NVIDIA GPU <br><code>cuda</code></td>
-      <td>SM60+ minimum<br>SM75+ recommended</td>
-      <td>✅</td>
-      <td>✅</td>
-      <td>✅</td>
-    </tr>
-    <tr>
-      <td></td>
-      <td>🟥 AMD GPU <br><code>cuda</code></td>
-      <td>
-        CDNA: gfx90a, gfx942, gfx950<br>
-        RDNA: gfx1100, gfx1101, gfx1102, gfx1103, gfx1150, gfx1151, gfx1152, gfx1153, gfx1200, gfx1201
-      </td>
-      <td>✅</td>
-      <td>✅</td>
-      <td>✅</td>
-    </tr>
-    <tr>
-      <td></td>
-      <td>🟦 Intel GPU <br><code>xpu</code></td>
-      <td>
-        Data Center GPU Max Series<br>
-        Arc A-Series (Alchemist)<br>
-        Arc B-Series (Battlemage)
-      </td>
-      <td>✅</td>
-      <td>✅</td>
-      <td>〰️</td>
-    </tr>
-    <tr>
-      <td></td>
-      <td>🟪 Intel Gaudi <br><code>hpu</code></td>
-      <td>Gaudi2, Gaudi3</td>
-      <td>✅</td>
-      <td>〰️</td>
-      <td>❌</td>
-    </tr>
-    <tr>
-      <td align="right">aarch64</td>
-      <td>◻️ CPU</td>
-      <td></td>
-      <td>✅</td>
-      <td>✅</td>
-      <td>❌</td>
-    </tr>
-    <tr>
-      <td></td>
-      <td>🟩 NVIDIA GPU <br><code>cuda</code></td>
-      <td>SM75+</td>
-      <td>✅</td>
-      <td>✅</td>
-      <td>✅</td>
-    </tr>
-    <tr>
-      <td colspan="6">🪟 <strong>Windows 11 / Windows Server 2022+</strong></td>
-    </tr>
-    <tr>
-      <td align="right">x86-64</td>
-      <td>◻️ CPU</td>
-      <td>AVX2</td>
-      <td>✅</td>
-      <td>✅</td>
-      <td>❌</td>
-    </tr>
-    <tr>
-      <td></td>
-      <td>🟩 NVIDIA GPU <br><code>cuda</code></td>
-      <td>SM60+ minimum<br>SM75+ recommended</td>
-      <td>✅</td>
-      <td>✅</td>
-      <td>✅</td>
-    </tr>
-    <tr>
-      <td></td>
-      <td>🟦 Intel GPU <br><code>xpu</code></td>
-      <td>
-        Arc A-Series (Alchemist) <br>
-        Arc B-Series (Battlemage)
-      </td>
-      <td>✅</td>
-      <td>✅</td>
-      <td>〰️</td>
-    </tr>
-    <tr>
-      <td colspan="6">🍎 <strong>macOS 14+</strong></td>
-    </tr>
-    <tr>
-      <td align="right">arm64</td>
-      <td>◻️ CPU</td>
-      <td>Apple M1+</td>
-      <td>✅</td>
-      <td>✅</td>
-      <td>❌</td>
-    </tr>
-    <tr>
-      <td></td>
-      <td>⬜ Metal <br><code>mps</code></td>
-      <td>Apple M1+</td>
-      <td>🐢</td>
-      <td>🐢</td>
-      <td>❌</td>
-  </tbody>
-</table>
+Currently, you still need to compile from source, after checking out the `multi-backend-refactor` branch (instructions WIP, but [the current docs on the compilation from source](https://huggingface.co/docs/bitsandbytes/main/en/installation#compile-from-source) are a good starting point; [feel free to share tips / input in this Github discussion](https://github.com/TimDettmers/bitsandbytes/discussions/1219). We'll soon enable nightly releases to make this much easier for you!
 
-## :book: Documentation
-* [Official Documentation](https://huggingface.co/docs/bitsandbytes/main)
-* 🤗 [Transformers](https://huggingface.co/docs/transformers/quantization/bitsandbytes)
-* 🤗 [Diffusers](https://huggingface.co/docs/diffusers/quantization/bitsandbytes)
-* 🤗 [PEFT](https://huggingface.co/docs/peft/developer_guides/quantization#quantize-a-model)
+Please give feedback to us in [this dedicated Github Discussion space](https://github.com/TimDettmers/bitsandbytes/discussions/categories/catch-all-alpha-testing-the-multi-backend-refactor)!
 
-## :heart: Sponsors
-The continued maintenance and development of `bitsandbytes` is made possible thanks to the generous support of our sponsors. Their contributions help ensure that we can keep improving the project and delivering valuable updates to the community.
-
-<kbd><a href="https://hf.co" target="_blank"><img width="100" src="https://huggingface.co/datasets/huggingface/brand-assets/resolve/main/hf-logo.svg" alt="Hugging Face"></a></kbd>
-&nbsp;
-<kbd><a href="https://intel.com" target="_blank"><img width="100" src="https://avatars.githubusercontent.com/u/17888862?s=100&v=4" alt="Intel"></a></kbd>
+We're super excited about these recent developments and grateful for any constructive input or support that you can give to help us make this a reality. BNB is a community project and we're excited for your collaboration 🤗
 
 ## License
+
 `bitsandbytes` is MIT licensed.
 
-## How to cite us
-If you found this library useful, please consider citing our work:
-
-### QLoRA
-
-```bibtex
-@article{dettmers2023qlora,
-  title={Qlora: Efficient finetuning of quantized llms},
-  author={Dettmers, Tim and Pagnoni, Artidoro and Holtzman, Ari and Zettlemoyer, Luke},
-  journal={arXiv preprint arXiv:2305.14314},
-  year={2023}
-}
-```
-
-### LLM.int8()
-
-```bibtex
-@article{dettmers2022llmint8,
-  title={LLM.int8(): 8-bit Matrix Multiplication for Transformers at Scale},
-  author={Dettmers, Tim and Lewis, Mike and Belkada, Younes and Zettlemoyer, Luke},
-  journal={arXiv preprint arXiv:2208.07339},
-  year={2022}
-}
-```
-
-### 8-bit Optimizers
-
-```bibtex
-@article{dettmers2022optimizers,
-  title={8-bit Optimizers via Block-wise Quantization},
-  author={Dettmers, Tim and Lewis, Mike and Shleifer, Sam and Zettlemoyer, Luke},
-  journal={9th International Conference on Learning Representations, ICLR},
-  year={2022}
-}
-```
+We thank Fabio Cannizzo for his work on [FastBinarySearch](https://github.com/fabiocannizzo/FastBinarySearch) which we use for CPU quantization.

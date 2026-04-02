@@ -5,16 +5,10 @@
 from collections import abc as container_abcs, defaultdict
 from copy import deepcopy
 from itertools import chain
-import logging
-from typing import Optional
-import warnings
 
 import torch
 
 import bitsandbytes.functional as F
-from bitsandbytes.utils import sync_gpu
-
-logger = logging.getLogger(__name__)
 
 
 class MockArgs:
@@ -63,15 +57,15 @@ class GlobalOptimManager:
 
         The key-values of the optimizer config for the input parameters are overridden
         This can be both, optimizer parameters like `betas` or `lr`, or it can be
-        8-bit specific parameters like `optim_bits`.
+        8-bit specific parameters like `optim_bits` or `percentile_clipping`.
 
         Arguments:
            parameters (`torch.Tensor` or `list(torch.Tensors)`):
              The input parameters.
            key (`str`):
-             The hyperparameter to override.
+             The hyperparamter to override.
            value:
-             The hyperparameter value.
+             The hyperparameter values.
            key_value_dict (`dict`):
              A dictionary with multiple key-values to override.
 
@@ -115,14 +109,12 @@ class GlobalOptimManager:
 
 
 class Optimizer8bit(torch.optim.Optimizer):
-    _FSDP_WRAPPED_QUANT_STATE_KEY = "__bnb_optimizer_quant_state__"
-
     def __init__(self, params, defaults, optim_bits=32, is_paged=False):
         """
         Base 8-bit optimizer class.
 
         Arguments:
-            params (`torch.Tensor`):
+            params (`torch.tensor`):
                 The input parameters to optimize.
             optim_bits (`int`, defaults to 32):
                 The number of bits of the optimizer state.
@@ -158,55 +150,18 @@ class Optimizer8bit(torch.optim.Optimizer):
         self.name2qmap["dynamic"] = F.create_dynamic_map(signed=True)
         self.name2qmap["udynamic"] = F.create_dynamic_map(signed=False)
 
-    def state_dict(self):
-        """Return optimizer state, wrapping quantization tensors for FSDP compatibility.
-
-        FSDP's full_optim_state_dict gathers all tensor states across ranks.
-        Quantization states (state1, state2, absmax, etc.) have different shapes
-        than model parameters, causing gather operations to fail. By wrapping
-        these tensors in a nested dict, FSDP skips them during gathering.
-        """
-        state_dict = super().state_dict()
-
-        # Deep copy the state to avoid modifying the original optimizer state
-        # PyTorch's state_dict() only does a shallow copy
-        state_dict["state"] = {
-            k: {kk: vv for kk, vv in v.items()} if isinstance(v, dict) else v for k, v in state_dict["state"].items()
-        }
-
-        # Wrap quantization-specific tensors in a nested dict to hide from FSDP
-        for param_state in state_dict["state"].values():
-            if isinstance(param_state, dict):
-                quant_state = {}
-                keys_to_wrap = [k for k in param_state if k in self.non_castable_tensor_keys]
-                for key in keys_to_wrap:
-                    quant_state[key] = param_state.pop(key)
-                if quant_state:
-                    param_state[self._FSDP_WRAPPED_QUANT_STATE_KEY] = quant_state
-
-        return state_dict
-
     def __setstate__(self, state):
         super().__setstate__(state)
 
-    def load_state_dict(self, state_dict, move_to_device=True):
+    def load_state_dict(self, state_dict):
         """Load an optimizer state.
 
         Arguments:
             state_dict (`dict`):
                 An optimizer state (should be returned from a call to `state_dict`) to load.
-            move_to_device (`bool`, defaults to `True`):
-                Whether to move the optimizer's state to the device.
         """
         # deepcopy, to be consistent with module API
         state_dict = deepcopy(state_dict)
-
-        # Unwrap quantization states that were wrapped for FSDP compatibility
-        for param_state in state_dict["state"].values():
-            if isinstance(param_state, dict) and self._FSDP_WRAPPED_QUANT_STATE_KEY in param_state:
-                quant_state = param_state.pop(self._FSDP_WRAPPED_QUANT_STATE_KEY)
-                param_state.update(quant_state)
-
         # Validate the state_dict
         groups = self.param_groups
         saved_groups = state_dict["param_groups"]
@@ -240,8 +195,7 @@ class Optimizer8bit(torch.optim.Optimizer):
             elif isinstance(value, dict):
                 for k, v in value.items():
                     if k in self.non_castable_tensor_keys:
-                        if move_to_device:
-                            value[k] = v.to(param.device)
+                        value[k] = v.to(param.device)
                     else:
                         value[k] = cast(param, v)
 
@@ -273,8 +227,6 @@ class Optimizer8bit(torch.optim.Optimizer):
     def to_gpu(self):
         for gindex, group in enumerate(self.param_groups):
             for pindex, p in enumerate(group["params"]):
-                if p.device.type == "cpu":
-                    continue
                 if p in self.state:
                     values = self.state[p]
                     for k, v in values.items():
@@ -315,13 +267,14 @@ class Optimizer8bit(torch.optim.Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
+        overflows = []
+
         if not self.initialized:
             self.check_overrides()
             self.to_gpu()  # needed for fairseq pure fp16 training
             self.initialized = True
 
         # if self.is_paged: self.page_mng.prefetch_all()
-        p = None
         for gindex, group in enumerate(self.param_groups):
             for pindex, p in enumerate(group["params"]):
                 if p.grad is None:
@@ -332,11 +285,11 @@ class Optimizer8bit(torch.optim.Optimizer):
 
                 self.prefetch_state(p)
                 self.update_step(group, p, gindex, pindex)
-                sync_gpu(p)
-        if self.is_paged and p is not None:
-            # all paged operations are asynchronous, we need
+                torch.cuda.synchronize()
+        if self.is_paged:
+            # all paged operation are asynchronous, we need
             # to sync to make sure all tensors are in the right state
-            sync_gpu(p)
+            torch.cuda.synchronize()
 
         return loss
 
@@ -346,23 +299,15 @@ class Optimizer8bit(torch.optim.Optimizer):
         config["eps"] = group["eps"]
         config["weight_decay"] = group["weight_decay"]
         config["lr"] = group["lr"]
-        config["alpha"] = group.get("alpha", 0.0)
-        config["t_alpha"] = group.get("t_alpha", None)
-        config["t_beta3"] = group.get("t_beta3", None)
         config["optim_bits"] = self.args.optim_bits
         config["min_8bit_size"] = self.args.min_8bit_size
+        config["percentile_clipping"] = self.args.percentile_clipping
+        config["block_wise"] = self.args.block_wise
         config["max_unorm"] = self.args.max_unorm
         config["skip_zeros"] = self.args.skip_zeros
 
         if (gindex, pindex) in self.mng.index2config:
             config.update(self.mng.index2config[(gindex, pindex)])
-
-        # Also check pid2config as a fallback so that override_config works
-        # regardless of whether it was called before or after register_parameters.
-        p = self.param_groups[gindex]["params"][pindex]
-        if id(p) in self.mng.pid2config:
-            config.update(self.mng.pid2config[id(p)])
-
         return config
 
     def init_state(self, group, p, gindex, pindex):
@@ -372,14 +317,6 @@ class Optimizer8bit(torch.optim.Optimizer):
         raise NotImplementedError("The update_step method needs to be overridden")
 
     def get_state_buffer(self, p, dtype=torch.float32):
-        if p.device.type == "cpu":
-            if self.is_paged and not getattr(self, "_cpu_paged_warned", False):
-                warnings.warn(
-                    "Paged optimizers are not supported on CPU. Falling back to non-paged optimizer behavior.",
-                    stacklevel=2,
-                )
-                self._cpu_paged_warned = True
-            return torch.zeros_like(p, dtype=dtype, device=p.device)
         if not self.is_paged or p.numel() < 1e5:
             return torch.zeros_like(p, dtype=dtype, device=p.device)
         else:
@@ -412,12 +349,11 @@ class Optimizer2State(Optimizer8bit):
         optim_bits=32,
         args=None,
         min_8bit_size=4096,
+        percentile_clipping=100,
+        block_wise=True,
         max_unorm=0.0,
         skip_zeros=False,
         is_paged=False,
-        alpha=0.0,
-        t_alpha: Optional[int] = None,
-        t_beta3: Optional[int] = None,
     ):
         """
         Base 2-state update optimizer class.
@@ -425,7 +361,7 @@ class Optimizer2State(Optimizer8bit):
         Arguments:
             optimizer_name (`str`):
                 The name of the optimizer.
-            params (`torch.Tensor`):
+            params (`torch.tensor`):
                 The input parameters to optimize.
             lr (`float`, defaults to 1e-3):
                 The learning rate.
@@ -441,19 +377,16 @@ class Optimizer2State(Optimizer8bit):
                 An object with additional arguments.
             min_8bit_size (`int`, defaults to 4096):
                 The minimum number of elements of the parameter tensors for 8-bit optimization.
+            percentile_clipping (`int`, defaults to 100):
+                Adapts clipping threshold automatically by tracking the last 100 gradient norms and clipping the gradient at a certain percentile to improve stability.
+            block_wise (`bool`, defaults to `True`):
+                Whether to independently quantize each block of tensors to reduce outlier effects and improve stability.
             max_unorm (`float`, defaults to 0.0):
                 The maximum value to normalize each block with.
             skip_zeros (`bool`, defaults to `False`):
                 Whether to skip zero values for sparse gradients and models to ensure correct updates.
             is_paged (`bool`, defaults to `False`):
                 Whether the optimizer is a paged optimizer or not.
-            alpha (`float`, defaults to 0.0):
-                The alpha value for the AdEMAMix optimizer.
-            t_alpha (`Optional[int]`, defaults to `None`):
-                Number of iterations for alpha scheduling with AdEMAMix.
-            t_beta3 (`Optional[int]`, defaults to `None`):
-                Number of iterations for beta scheduling with AdEMAMix.
-
         """
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -468,17 +401,16 @@ class Optimizer2State(Optimizer8bit):
                 raise ValueError(f"Invalid beta parameter at index {i}: {betas[i]}")
         if not 0.0 <= weight_decay:
             raise ValueError(f"Invalid weight_decay value: {weight_decay}")
-
-        defaults = dict(
-            lr=lr, betas=betas, eps=eps, weight_decay=weight_decay, alpha=alpha, t_alpha=t_alpha, t_beta3=t_beta3
-        )
-
+        defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
         super().__init__(params, defaults, optim_bits, is_paged)
 
         if args is None:
             args = {}
             args["optim_bits"] = optim_bits
+            args["percentile_clipping"] = 100
             args["min_8bit_size"] = min_8bit_size
+            args["percentile_clipping"] = percentile_clipping
+            args["block_wise"] = block_wise
             args["max_unorm"] = max_unorm
             args["skip_zeros"] = skip_zeros
 
@@ -497,7 +429,7 @@ class Optimizer2State(Optimizer8bit):
         elif config["optim_bits"] == 8:
             dtype = torch.uint8
         else:
-            raise NotImplementedError(f"Amount of optimizer bits not supported: {config['optim_bits']}")
+            raise NotImplementedError(f'Amount of optimizer bits not supported: {config["optim_bits"]}')
 
         if p.numel() < config["min_8bit_size"]:
             dtype = torch.float32
@@ -521,12 +453,21 @@ class Optimizer2State(Optimizer8bit):
             state["state2"] = self.get_state_buffer(p, dtype=torch.uint8)
             state["qmap2"] = self.name2qmap["udynamic"]
 
-            blocksize = 256
-            n = p.numel()
-            blocks = (n // blocksize) + bool(n % blocksize)
+            if config["block_wise"]:
+                n = p.numel()
+                blocks = n // 2048
+                blocks += 1 if n % 2048 > 0 else 0
 
-            state["absmax1"] = torch.zeros((blocks,), dtype=torch.float32, device=p.device)
-            state["absmax2"] = torch.zeros((blocks,), dtype=torch.float32, device=p.device)
+                state["absmax1"] = torch.zeros((blocks,), dtype=torch.float32, device=p.device)
+                state["absmax2"] = torch.zeros((blocks,), dtype=torch.float32, device=p.device)
+            else:
+                state["max1"] = torch.zeros((1,), dtype=torch.float32, device=p.device)
+                state["new_max1"] = torch.zeros((1,), dtype=torch.float32, device=p.device)
+                state["max2"] = torch.zeros((1,), dtype=torch.float32, device=p.device)
+                state["new_max2"] = torch.zeros((1,), dtype=torch.float32, device=p.device)
+
+        if config["percentile_clipping"] < 100:
+            state["gnorm_vec"] = torch.zeros((100,), device=p.device)
 
         if config["max_unorm"] > 0.0:
             state["unorm_vec"] = torch.zeros((1,), device=p.device)
@@ -545,6 +486,16 @@ class Optimizer2State(Optimizer8bit):
         state["step"] += 1
         step = state["step"]
 
+        if config["percentile_clipping"] < 100:
+            current_gnorm, clip_value, gnorm_scale = F.percentile_clipping(
+                grad,
+                state["gnorm_vec"],
+                step,
+                config["percentile_clipping"],
+            )
+        else:
+            gnorm_scale = 1.0
+
         if state["state1"].dtype == torch.float:
             F.optimizer_update_32bit(
                 self.optimizer_name,
@@ -557,16 +508,41 @@ class Optimizer2State(Optimizer8bit):
                 config["lr"],
                 state["state2"],
                 config["betas"][1],
-                config["betas"][2] if len(config["betas"]) >= 3 else 0.0,
-                config.get("alpha", 0.0),
                 config["weight_decay"],
-                1.0,
+                gnorm_scale,
                 state["unorm_vec"] if config["max_unorm"] > 0.0 else None,
                 max_unorm=config["max_unorm"],
                 skip_zeros=config["skip_zeros"],
             )
 
-        elif state["state1"].dtype == torch.uint8:
+        elif state["state1"].dtype == torch.uint8 and not config["block_wise"]:
+            F.optimizer_update_8bit(
+                self.optimizer_name,
+                grad,
+                p,
+                state["state1"],
+                state["state2"],
+                config["betas"][0],
+                config["betas"][1],
+                config["eps"],
+                step,
+                config["lr"],
+                state["qmap1"],
+                state["qmap2"],
+                state["max1"],
+                state["max2"],
+                state["new_max1"],
+                state["new_max2"],
+                config["weight_decay"],
+                gnorm_scale=gnorm_scale,
+                unorm_vec=state["unorm_vec"] if config["max_unorm"] > 0.0 else None,
+                max_unorm=config["max_unorm"],
+            )
+
+            # swap maxes
+            state["max1"], state["new_max1"] = state["new_max1"], state["max1"]
+            state["max2"], state["new_max2"] = state["new_max2"], state["max2"]
+        elif state["state1"].dtype == torch.uint8 and config["block_wise"]:
             F.optimizer_update_8bit_blockwise(
                 self.optimizer_name,
                 grad,
@@ -575,8 +551,6 @@ class Optimizer2State(Optimizer8bit):
                 state["state2"],
                 config["betas"][0],
                 config["betas"][1],
-                config["betas"][2] if len(config["betas"]) >= 3 else 0.0,
-                config.get("alpha", 0.0),
                 config["eps"],
                 step,
                 config["lr"],
@@ -585,7 +559,7 @@ class Optimizer2State(Optimizer8bit):
                 state["absmax1"],
                 state["absmax2"],
                 config["weight_decay"],
-                gnorm_scale=1.0,
+                gnorm_scale=gnorm_scale,
                 skip_zeros=config["skip_zeros"],
             )
 
@@ -602,6 +576,8 @@ class Optimizer1State(Optimizer8bit):
         optim_bits=32,
         args=None,
         min_8bit_size=4096,
+        percentile_clipping=100,
+        block_wise=True,
         max_unorm=0.0,
         skip_zeros=False,
         is_paged=False,
@@ -612,7 +588,7 @@ class Optimizer1State(Optimizer8bit):
         Arguments:
             optimizer_name (`str`):
                 The name of the optimizer.
-            params (`torch.Tensor`):
+            params (`torch.tensor`):
                 The input parameters to optimize.
             lr (`float`, defaults to 1e-3):
                 The learning rate.
@@ -628,6 +604,10 @@ class Optimizer1State(Optimizer8bit):
                 An object with additional arguments.
             min_8bit_size (`int`, defaults to 4096):
                 The minimum number of elements of the parameter tensors for 8-bit optimization.
+            percentile_clipping (`int`, defaults to 100):
+                Adapts clipping threshold automatically by tracking the last 100 gradient norms and clipping the gradient at a certain percentile to improve stability.
+            block_wise (`bool`, defaults to `True`):
+                Whether to independently quantize each block of tensors to reduce outlier effects and improve stability.
             max_unorm (`float`, defaults to 0.0):
                 The maximum value to normalize each block with.
             skip_zeros (`bool`, defaults to `False`):
@@ -650,7 +630,10 @@ class Optimizer1State(Optimizer8bit):
         if args is None:
             args = {}
             args["optim_bits"] = optim_bits
+            args["percentile_clipping"] = 100
             args["min_8bit_size"] = min_8bit_size
+            args["percentile_clipping"] = percentile_clipping
+            args["block_wise"] = block_wise
             args["max_unorm"] = max_unorm
             args["skip_zeros"] = skip_zeros
 
@@ -669,7 +652,7 @@ class Optimizer1State(Optimizer8bit):
         elif config["optim_bits"] == 8:
             dtype = torch.uint8
         else:
-            raise NotImplementedError(f"Amount of optimizer bits not supported: {config['optim_bits']}")
+            raise NotImplementedError(f'Amount of optimizer bits not supported: {config["optim_bits"]}')
 
         if p.numel() < config["min_8bit_size"]:
             dtype = torch.float32
@@ -688,11 +671,18 @@ class Optimizer1State(Optimizer8bit):
             state["state1"] = self.get_state_buffer(p, dtype=torch.uint8)
             state["qmap1"] = self.name2qmap["dynamic"]
 
-            blocksize = 256
-            n = p.numel()
-            blocks = (n // blocksize) + bool(n % blocksize)
+            if config["block_wise"]:
+                n = p.numel()
+                blocks = n // 2048
+                blocks += 1 if n % 2048 > 0 else 0
 
-            state["absmax1"] = torch.zeros((blocks,), dtype=torch.float32, device=p.device)
+                state["absmax1"] = torch.zeros((blocks,), dtype=torch.float32, device=p.device)
+            else:
+                state["max1"] = torch.zeros((1,), dtype=torch.float32, device=p.device)
+                state["new_max1"] = torch.zeros((1,), dtype=torch.float32, device=p.device)
+
+        if config["percentile_clipping"] < 100:
+            state["gnorm_vec"] = torch.zeros((100,), device=p.device)
 
         if config["max_unorm"] > 0.0:
             state["unorm_vec"] = torch.zeros((1,), device=p.device)
@@ -711,6 +701,16 @@ class Optimizer1State(Optimizer8bit):
         state["step"] += 1
         step = state["step"]
 
+        if config["percentile_clipping"] < 100:
+            current_gnorm, clip_value, gnorm_scale = F.percentile_clipping(
+                grad,
+                state["gnorm_vec"],
+                step,
+                config["percentile_clipping"],
+            )
+        else:
+            gnorm_scale = 1.0
+
         if state["state1"].dtype == torch.float:
             F.optimizer_update_32bit(
                 self.optimizer_name,
@@ -723,16 +723,39 @@ class Optimizer1State(Optimizer8bit):
                 config["lr"],
                 None,
                 config["betas"][1],
-                0.0,
-                0.0,
                 config["weight_decay"],
-                1.0,
+                gnorm_scale,
                 state["unorm_vec"] if config["max_unorm"] > 0.0 else None,
                 max_unorm=config["max_unorm"],
                 skip_zeros=config["skip_zeros"],
             )
 
-        elif state["state1"].dtype == torch.uint8:
+        elif state["state1"].dtype == torch.uint8 and not config["block_wise"]:
+            F.optimizer_update_8bit(
+                self.optimizer_name,
+                grad,
+                p,
+                state["state1"],
+                None,
+                config["betas"][0],
+                config["betas"][1],
+                config["eps"],
+                step,
+                config["lr"],
+                state["qmap1"],
+                None,
+                state["max1"],
+                None,
+                state["new_max1"],
+                None,
+                config["weight_decay"],
+                gnorm_scale,
+                state["unorm_vec"] if config["max_unorm"] > 0.0 else None,
+                max_unorm=config["max_unorm"],
+            )
+
+            state["max1"], state["new_max1"] = state["new_max1"], state["max1"]
+        elif state["state1"].dtype == torch.uint8 and config["block_wise"]:
             F.optimizer_update_8bit_blockwise(
                 self.optimizer_name,
                 grad,
@@ -741,8 +764,6 @@ class Optimizer1State(Optimizer8bit):
                 None,
                 config["betas"][0],
                 config["betas"][1],
-                0.0,
-                0.0,
                 config["eps"],
                 step,
                 config["lr"],
@@ -751,6 +772,6 @@ class Optimizer1State(Optimizer8bit):
                 state["absmax1"],
                 None,
                 config["weight_decay"],
-                gnorm_scale=1.0,
+                gnorm_scale=gnorm_scale,
                 skip_zeros=config["skip_zeros"],
             )

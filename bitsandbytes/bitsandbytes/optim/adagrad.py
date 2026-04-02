@@ -17,6 +17,8 @@ class Adagrad(Optimizer1State):
         optim_bits=32,
         args=None,
         min_8bit_size=4096,
+        percentile_clipping=100,
+        block_wise=True,
     ):
         """
         Base Adagrad optimizer.
@@ -40,6 +42,10 @@ class Adagrad(Optimizer1State):
                 An object with additional arguments.
             min_8bit_size (`int`, defaults to 4096):
                 The minimum number of elements of the parameter tensors for 8-bit optimization.
+            percentile_clipping (`int`, defaults to 100):
+                Adapts clipping threshold automatically by tracking the last 100 gradient norms and clipping the gradient at a certain percentile to improve stability.
+            block_wise (`bool`, defaults to `True`):
+                Whether to independently quantize each block of tensors to reduce outlier effects and improve stability.
         """
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -61,6 +67,8 @@ class Adagrad(Optimizer1State):
             optim_bits,
             args,
             min_8bit_size,
+            percentile_clipping,
+            block_wise,
         )
 
 
@@ -76,6 +84,8 @@ class Adagrad8bit(Optimizer1State):
         optim_bits=8,
         args=None,
         min_8bit_size=4096,
+        percentile_clipping=100,
+        block_wise=True,
     ):
         """
         8-bit Adagrad optimizer.
@@ -99,6 +109,10 @@ class Adagrad8bit(Optimizer1State):
                 An object with additional arguments.
             min_8bit_size (`int`, defaults to 4096):
                 The minimum number of elements of the parameter tensors for 8-bit optimization.
+            percentile_clipping (`int`, defaults to 100):
+                Adapts clipping threshold automatically by tracking the last 100 gradient norms and clipping the gradient at a certain percentile to improve stability.
+            block_wise (`bool`, defaults to `True`):
+                Whether to independently quantize each block of tensors to reduce outlier effects and improve stability.
         """
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -110,6 +124,7 @@ class Adagrad8bit(Optimizer1State):
             raise ValueError("Initial accumulator value != 0.0 not supported!")
         if lr_decay != 0.0:
             raise ValueError("Lr Decay != 0.0 not supported!")
+        assert block_wise
         super().__init__(
             "adagrad",
             params,
@@ -120,6 +135,8 @@ class Adagrad8bit(Optimizer1State):
             8,
             args,
             min_8bit_size,
+            percentile_clipping,
+            block_wise,
         )
 
 
@@ -135,6 +152,8 @@ class Adagrad32bit(Optimizer1State):
         optim_bits=32,
         args=None,
         min_8bit_size=4096,
+        percentile_clipping=100,
+        block_wise=True,
     ):
         """
         32-bit Adagrad optimizer.
@@ -158,6 +177,10 @@ class Adagrad32bit(Optimizer1State):
                 An object with additional arguments.
             min_8bit_size (`int`, defaults to 4096):
                 The minimum number of elements of the parameter tensors for 8-bit optimization.
+            percentile_clipping (`int`, defaults to 100):
+                Adapts clipping threshold automatically by tracking the last 100 gradient norms and clipping the gradient at a certain percentile to improve stability.
+            block_wise (`bool`, defaults to `True`):
+                Whether to independently quantize each block of tensors to reduce outlier effects and improve stability.
         """
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -179,4 +202,6 @@ class Adagrad32bit(Optimizer1State):
             32,
             args,
             min_8bit_size,
+            percentile_clipping,
+            block_wise,
         )

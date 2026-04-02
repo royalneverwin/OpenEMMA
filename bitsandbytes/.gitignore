@@ -22,11 +22,9 @@ CMakeFiles/
 bitsandbytes.dir/
 Debug/
 Release/
-cmake-build-*/
 
 # IDE local files
 .vs/
-.idea/
 
 # Distribution / packaging
 .Python
@@ -156,6 +154,3 @@ dmypy.json
 dependencies
 cuda_build
 output/
-cuda-spec.md
-cuda-spec-additions.md
-agents/*_issues.json

@@ -1,113 +1,91 @@
-# Installation Guide
+# Installation
 
-Welcome to the installation guide for the `bitsandbytes` library! This document provides step-by-step instructions to install `bitsandbytes` across various platforms and hardware configurations.
+## CUDA
 
-We provide official support for NVIDIA GPUs, CPUs, Intel XPUs, and Intel Gaudi. We also have experimental support for additional platforms such as AMD ROCm and Apple Silicon.
+bitsandbytes is only supported on CUDA GPUs for CUDA versions **11.0 - 12.5**.
 
-## Table of Contents
+The latest version of bitsandbytes builds on:
 
-- [System Requirements](#requirements)
-- [NVIDIA CUDA](#cuda)
-  - [Installation via PyPI](#cuda-pip)
-  - [Compile from Source](#cuda-compile)
-- [Intel XPU](#xpu)
-  - [Installation via PyPI](#xpu-pip)
-- [Intel Gaudi](#gaudi)
-  - [Installation via PyPI](#gaudi-pip)
-- [CPU](#cpu)
-  - [Installation via PyPI](#cpu-pip)
-  - [Compile from Source](#cpu-compile)
-- [AMD ROCm (Preview)](#rocm)
-  - [Installation via PyPI](#rocm-pip)
-  - [Compile from Source](#rocm-compile)
-- [Preview Wheels](#preview-wheels)
+| OS | CUDA | Compiler |
+|---|---|---|
+| Linux | 11.7 - 12.3 | GCC 11.4 |
+|  | 12.4+ | GCC 13.2 |
+| Windows | 11.7 - 12.4 | MSVC 19.38+ (VS2022 17.8.0+) |
 
-## System Requirements[[requirements]]
+> [!TIP]
+> MacOS support is still a work in progress! Subscribe to this [issue](https://github.com/TimDettmers/bitsandbytes/issues/1020) to get notified about discussions and to track the integration progress.
 
-These are the minimum requirements for `bitsandbytes` across all platforms. Please be aware that some compute platforms may impose more strict requirements.
+For Linux systems, make sure your hardware meets the following requirements to use bitsandbytes features.
 
-* Python >= 3.10
-* PyTorch >= 2.3
+| **Feature** | **Hardware requirement** |
+|---|---|
+| LLM.int8() | NVIDIA Turing (RTX 20 series, T4) or Ampere (RTX 30 series, A4-A100) GPUs |
+| 8-bit optimizers/quantization | NVIDIA Kepler (GTX 780 or newer) |
 
-## NVIDIA CUDA[[cuda]]
+> [!WARNING]
+> bitsandbytes >= 0.39.1 no longer includes Kepler binaries in pip installations. This requires manual compilation, and you should follow the general steps and use `cuda11x_nomatmul_kepler` for Kepler-targeted compilation.
 
-`bitsandbytes` is currently supported on NVIDIA GPUs with [Compute Capability](https://developer.nvidia.com/cuda-gpus) 6.0+.
-The library can be built using CUDA Toolkit versions as old as **11.8**.
-
-| **Feature**                     | **CC Required** | **Example Hardware Requirement**            |
-|---------------------------------|-----------------|---------------------------------------------|
-| LLM.int8()                      | 7.5+            | Turing (RTX 20 series, T4) or newer GPUs    |
-| 8-bit optimizers/quantization   | 6.0+            | Pascal (GTX 10X0 series, P100) or newer GPUs|
-| NF4/FP4 quantization            | 6.0+            | Pascal (GTX 10X0 series, P100) or newer GPUs|
-
-
-### Installation via PyPI[[cuda-pip]]
-
-This is the most straightforward and recommended installation option.
-
-The currently distributed `bitsandbytes` packages are built with the following configurations:
-
-| **OS**             | **CUDA Toolkit** | **Host Compiler**    | **Targets**
-|--------------------|------------------|----------------------|--------------
-| **Linux x86-64**   | 11.8 - 12.6      | GCC 11.2             | sm60, sm70, sm75, sm80, sm86, sm89, sm90
-| **Linux x86-64**   | 12.8 - 12.9      | GCC 11.2             | sm70, sm75, sm80, sm86, sm89, sm90, sm100, sm120
-| **Linux x86-64**   | 13.0             | GCC 11.2             | sm75, sm80, sm86, sm89, sm90, sm100, sm120
-| **Linux aarch64**  | 11.8 - 12.6      | GCC 11.2             | sm75, sm80, sm90
-| **Linux aarch64**  | 12.8 - 13.0      | GCC 11.2             | sm75, sm80, sm90, sm100, sm110, sm120, sm121
-| **Windows x86-64** | 11.8 - 12.6      | MSVC 19.43+ (VS2022) | sm50, sm60, sm75, sm80, sm86, sm89, sm90
-| **Windows x86-64** | 12.8 - 12.9      | MSVC 19.43+ (VS2022) | sm70, sm75, sm80, sm86, sm89, sm90, sm100, sm120
-| **Windows x86-64** | 13.0             | MSVC 19.43+ (VS2022) | sm75, sm80, sm86, sm89, sm90, sm100, sm120
-
-The Linux build has a minimum glibc version of 2.24.
-
-Use `pip` or `uv` to install the latest release:
+To install from PyPI.
 
 ```bash
 pip install bitsandbytes
 ```
 
-### Compile from Source[[cuda-compile]]
+### Compile from source
 
-> [!TIP]
-> Don't hesitate to compile from source! The process is pretty straight forward and resilient. This might be needed for older CUDA Toolkit versions or Linux distributions, or other less common configurations.
-
-For Linux and Windows systems, compiling from source allows you to customize the build configurations. See below for detailed platform-specific instructions (see the `CMakeLists.txt` if you want to check the specifics and explore some additional options):
+For Linux and Windows systems, you can compile bitsandbytes from source. Installing from source allows for more build options with different CMake configurations.
 
 <hfoptions id="source">
 <hfoption id="Linux">
 
-To compile from source, you need CMake >= **3.22.1** and Python >= **3.10** installed. Make sure you have a compiler installed to compile C++ (`gcc`, `make`, headers, etc.). It is recommended to use GCC 11 or newer.
-
-For example, to install a compiler and CMake on Ubuntu:
+To compile from source, you need CMake >= **3.22.1** and Python >= **3.8** installed. Make sure you have a compiler installed to compile C++ (gcc, make, headers, etc.). For example, to install a compiler and CMake on Ubuntu:
 
 ```bash
 apt-get install -y build-essential cmake
 ```
 
-You should also install CUDA Toolkit by following the [NVIDIA CUDA Installation Guide for Linux](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html) guide. The current minimum supported CUDA Toolkit version that we support is **11.8**.
+You should also install CUDA Toolkit by following the [NVIDIA CUDA Installation Guide for Linux](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html) guide from NVIDIA. The current expected CUDA Toolkit version is **11.1+** and it is recommended to install **GCC >= 7.3** and required to have at least **GCC >= 6**.
+
+Refer to the following table if you're using another CUDA Toolkit version.
+
+| CUDA Toolkit | GCC |
+|---|---|
+| >= 11.4.1 | >= 11 |
+| >= 12.0 | >= 12 |
+| >= 12.4 | >= 13 |
+
+Now to install the bitsandbytes package from source, run the following commands:
 
 ```bash
-git clone https://github.com/bitsandbytes-foundation/bitsandbytes.git && cd bitsandbytes/
+git clone https://github.com/TimDettmers/bitsandbytes.git && cd bitsandbytes/
+pip install -r requirements-dev.txt
 cmake -DCOMPUTE_BACKEND=cuda -S .
 make
-pip install -e .   # `-e` for "editable" install, when developing BNB (otherwise leave that out)
+pip install .
 ```
 
 > [!TIP]
-> If you have multiple versions of the CUDA Toolkit installed or it is in a non-standard location, please refer to CMake CUDA documentation for how to configure the CUDA compiler.
+> If you have multiple versions of CUDA installed or installed it in a non-standard location, please refer to CMake CUDA documentation for how to configure the CUDA compiler.
 
 </hfoption>
 <hfoption id="Windows">
 
-Compilation from source on Windows systems require Visual Studio with C++ support as well as an installation of the CUDA Toolkit.
+Windows systems require Visual Studio with C++ support as well as an installation of the CUDA SDK.
 
-To compile from source, you need CMake >= **3.22.1** and Python >= **3.10** installed. You should also install CUDA Toolkit by following the [CUDA Installation Guide for Windows](https://docs.nvidia.com/cuda/cuda-installation-guide-microsoft-windows/index.html) guide from NVIDIA. The current minimum supported CUDA Toolkit version that we support is **11.8**.
+To compile from source, you need CMake >= **3.22.1** and Python >= **3.8** installed. You should also install CUDA Toolkit by following the [CUDA Installation Guide for Windows](https://docs.nvidia.com/cuda/cuda-installation-guide-microsoft-windows/index.html) guide from NVIDIA.
+
+Refer to the following table if you're using another CUDA Toolkit version.
+
+| CUDA Toolkit | MSVC |
+|---|---|
+| >= 11.6 | 19.30+ (VS2022) |
 
 ```bash
-git clone https://github.com/bitsandbytes-foundation/bitsandbytes.git && cd bitsandbytes/
+git clone https://github.com/TimDettmers/bitsandbytes.git && cd bitsandbytes/
+pip install -r requirements-dev.txt
 cmake -DCOMPUTE_BACKEND=cuda -S .
 cmake --build . --config Release
-pip install -e .   # `-e` for "editable" install, when developing BNB (otherwise leave that out)
+python -m build --wheel
 ```
 
 Big thanks to [wkpark](https://github.com/wkpark), [Jamezo97](https://github.com/Jamezo97), [rickardp](https://github.com/rickardp), [akx](https://github.com/akx) for their amazing contributions to make bitsandbytes compatible with Windows.
@@ -115,151 +93,91 @@ Big thanks to [wkpark](https://github.com/wkpark), [Jamezo97](https://github.com
 </hfoption>
 </hfoptions>
 
-## Intel XPU[[xpu]]
+### PyTorch CUDA versions
 
-* A compatible PyTorch version with Intel XPU support is required. The current minimum is **PyTorch 2.6.0**. It is recommended to use the latest stable release. See [Getting Started on Intel GPU](https://docs.pytorch.org/docs/stable/notes/get_start_xpu.html) for guidance.
+Some bitsandbytes features may need a newer CUDA version than the one currently supported by PyTorch binaries from Conda and pip. In this case, you should follow these instructions to load a precompiled bitsandbytes binary.
 
-### Installation via PyPI[[xpu-pip]]
+1. Determine the path of the CUDA version you want to use. Common paths include:
 
-This is the most straightforward and recommended installation option.
+* `/usr/local/cuda`
+* `/usr/local/cuda-XX.X` where `XX.X` is the CUDA version number
 
-The currently distributed `bitsandbytes` packages are built with the following configurations:
-
-| **OS**             | **oneAPI Toolkit** | **Kernel Implementation** |
-|--------------------|------------------|----------------------|
-| **Linux x86-64**   | 2025.1.3         | SYCL + Triton        |
-| **Windows x86-64** | 2025.1.3         | SYCL + Triton        |
-
-The Linux build has a minimum glibc version of 2.34.
-
-Use `pip` or `uv` to install the latest release:
+Then locally install the CUDA version you need with this script from bitsandbytes:
 
 ```bash
-pip install bitsandbytes
+wget https://raw.githubusercontent.com/TimDettmers/bitsandbytes/main/install_cuda.sh
+# Syntax cuda_install CUDA_VERSION INSTALL_PREFIX EXPORT_TO_BASH
+#   CUDA_VERSION in {110, 111, 112, 113, 114, 115, 116, 117, 118, 120, 121, 122, 123, 124, 125}
+#   EXPORT_TO_BASH in {0, 1} with 0=False and 1=True
+
+# For example, the following installs CUDA 11.7 to ~/local/cuda-11.7 and exports the path to your .bashrc
+
+bash install_cuda.sh 117 ~/local 1
 ```
 
-## Intel Gaudi[[gaudi]]
+2. Set the environment variables `BNB_CUDA_VERSION` and `LD_LIBRARY_PATH` by manually overriding the CUDA version installed by PyTorch.
 
-* A compatible PyTorch version with Intel Gaudi support is required. The current minimum is **Gaudi v1.21** with **PyTorch 2.6.0**. It is recommended to use the latest stable release. See the Gaudi software [installation guide](https://docs.habana.ai/en/latest/Installation_Guide/index.html) for guidance.
-
-
-### Installation from PyPI[[gaudi-pip]]
-
-Use `pip` or `uv` to install the latest release:
+> [!TIP]
+> It is recommended to add the following lines to the `.bashrc` file to make them permanent.
 
 ```bash
-pip install bitsandbytes
+export BNB_CUDA_VERSION=<VERSION>
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:<PATH>
 ```
 
-## CPU[[cpu]]
-
-### Installation from PyPI[[cpu-pip]]
-
-This is the most straightforward and recommended installation option.
-
-The currently distributed `bitsandbytes` packages are built with the following configurations:
-
-| **OS**             | **Host Compiler**    | Hardware Minimum
-|--------------------|----------------------|----------------------|
-| **Linux x86-64**   | GCC 11.4             | AVX2                 |
-| **Linux aarch64**  | GCC 11.4             |                      |
-| **Windows x86-64** | MSVC 19.43+ (VS2022) | AVX2                 |
-| **macOS arm64**    | Apple Clang 17       |                      |
-
-The Linux build has a minimum glibc version of 2.24.
-
-Use `pip` or `uv` to install the latest release:
+For example, to use a local install path:
 
 ```bash
-pip install bitsandbytes
+export BNB_CUDA_VERSION=117
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/tim/local/cuda-11.7
 ```
 
-### Compile from Source[[cpu-compile]]
+3. Now when you launch bitsandbytes with these environment variables, the PyTorch CUDA version is overridden by the new CUDA version (in this example, version 11.7) and a different bitsandbytes library is loaded.
 
-To compile from source, simply install the package from source using `pip`. The package will be built for CPU only at this time.
 
-```bash
-git clone https://github.com/bitsandbytes-foundation/bitsandbytes.git && cd bitsandbytes/
-pip install -e .
-```
+## Intel CPU
 
-## AMD ROCm (Preview)[[rocm]]
+> [!TIP]
+> Intel CPU backend only supports building from source; for now, please follow the instructions below.
 
-* Support for AMD GPUs is currently in a preview state.
-* All features are supported for both consumer RDNA devices and Data Center CDNA products.
-* A compatible PyTorch version with AMD ROCm support is required. It is recommended to use the latest stable release. See [PyTorch on ROCm](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/install/3rd-party/pytorch-install.html) for guidance.
+Like CUDA, you can compile bitsandbytes from source for Linux and Windows systems. Installing from source allows for more build options with different CMake configurations.
 
-### Installation from PyPI[[rocm-pip]]
-
-This is the most straightforward and recommended installation option.
-
-The currently distributed `bitsandbytes` are built with the following configurations:
-
-| **OS**             | **ROCm** | **Targets**
-|--------------------|----------|---------------------------------------------------------------------|
-| **Linux x86-64**   | 6.2.4    | CDNA: gfx90a, gfx942 / RDNA: gfx1100, gfx1101, gfx1102, gfx1103
-| **Linux x86-64**   | 6.3.4    | CDNA: gfx90a, gfx942 / RDNA: gfx1100, gfx1101, gfx1102, gfx1103
-| **Linux x86-64**   | 6.4.4    | CDNA: gfx90a, gfx942 / RDNA: gfx1100, gfx1101, gfx1102, gfx1103, gfx1150, gfx1151, gfx1152, gfx1153, gfx1200, gfx1201
-| **Linux x86-64**   | 7.0.2    | CDNA: gfx90a, gfx942, gfx950 / RDNA: gfx1100, gfx1101, gfx1102, gfx1103, gfx1150, gfx1151, gfx1152, gfx1153, gfx1200, gfx1201
-| **Linux x86-64**   | 7.1.0    | CDNA: gfx90a, gfx942, gfx950 / RDNA: gfx1100, gfx1101, gfx1102, gfx1103, gfx1150, gfx1151, gfx1152, gfx1153, gfx1200, gfx1201
-| **Linux x86-64**   | 7.2.0    | CDNA: gfx90a, gfx942, gfx950 / RDNA: gfx1100, gfx1101, gfx1102, gfx1103, gfx1150, gfx1151, gfx1152, gfx1153, gfx1200, gfx1201
-
-**Windows is not currently supported.**
-
-Use `pip` or `uv` to install the latest release:
-
-```bash
-pip install bitsandbytes
-```
-
-### Compile from Source[[rocm-compile]]
-
-bitsandbytes can be compiled from ROCm 6.2 - ROCm 7.2.
-
-To compile from source, you need CMake >= **3.31.6**.
-
-```bash
-# Install bitsandbytes from source
-# Clone bitsandbytes repo
-git clone https://github.com/bitsandbytes-foundation/bitsandbytes.git && cd bitsandbytes/
-
-# Compile & install
-apt-get install -y build-essential cmake  # install build tools dependencies, unless present
-cmake -DCOMPUTE_BACKEND=hip -S .  # Use -DBNB_ROCM_ARCH="gfx90a;gfx942" to target specific gpu arch
-make
-pip install -e .   # `-e` for "editable" install, when developing BNB (otherwise leave that out)
-```
-
-## Preview Wheels[[preview-wheels]]
-
-If you would like to use new features even before they are officially released and help us test them, feel free to install the wheel directly from our CI (*the wheel links will remain stable!*):
-
-<hfoptions id="OS">
+<hfoptions id="source">
 <hfoption id="Linux">
 
+To compile from source, you need CMake >= **3.22.1** and Python >= **3.8** installed. Make sure you have a compiler installed to compile C++ (gcc, make, headers, etc.). For example, to install a compiler and CMake on Ubuntu:
+
 ```bash
-# Note: if you don't want to reinstall our dependencies, append the `--no-deps` flag!
+apt-get install -y build-essential cmake
+```
 
-# x86_64 (most users)
-pip install --force-reinstall https://github.com/bitsandbytes-foundation/bitsandbytes/releases/download/continuous-release_main/bitsandbytes-1.33.7.preview-py3-none-manylinux_2_24_x86_64.whl
+We recommend installing **GCC >= 11** and have at least **GCC >= 6**.
 
-# ARM/aarch64
-pip install --force-reinstall https://github.com/bitsandbytes-foundation/bitsandbytes/releases/download/continuous-release_main/bitsandbytes-1.33.7.preview-py3-none-manylinux_2_24_aarch64.whl
+Now to install the bitsandbytes package from source, run the following commands:
+
+```bash
+git clone --branch multi-backend-refactor https://github.com/TimDettmers/bitsandbytes.git && cd bitsandbytes/
+pip install -r requirements-dev.txt
+pip install intel_extension_for_pytorch
+cmake -DCOMPUTE_BACKEND=cpu -S .
+make
+pip install .
 ```
 
 </hfoption>
 <hfoption id="Windows">
 
-```bash
-# Note: if you don't want to reinstall our dependencies, append the `--no-deps` flag!
-pip install --force-reinstall https://github.com/bitsandbytes-foundation/bitsandbytes/releases/download/continuous-release_main/bitsandbytes-1.33.7.preview-py3-none-win_amd64.whl
-```
-</hfoption>
-<hfoption id="macOS">
+Windows systems require Visual Studio with C++ support.
+
+To compile from source, you need CMake >= **3.22.1** and Python >= **3.8** installed.
 
 ```bash
-# Note: if you don't want to reinstall our dependencies, append the `--no-deps` flag!
-pip install --force-reinstall https://github.com/bitsandbytes-foundation/bitsandbytes/releases/download/continuous-release_main/bitsandbytes-1.33.7.preview-py3-none-macosx_14_0_arm64.whl
+git clone --branch multi-backend-refactor https://github.com/TimDettmers/bitsandbytes.git && cd bitsandbytes/
+pip install -r requirements-dev.txt
+cmake -DCOMPUTE_BACKEND=cpu -S .
+cmake --build . --config Release
+pip install .
 ```
+
 </hfoption>
 </hfoptions>

@@ -1,23 +1,16 @@
 import gc
-import random
 
-import numpy as np
 import pytest
 import torch
 
 
-def _set_seed():
-    torch.manual_seed(0)
-    torch.cuda.manual_seed_all(0)
-    torch.mps.manual_seed(0)
-    np.random.seed(0)
-    random.seed(0)
-
-
 def pytest_runtest_call(item):
     try:
-        _set_seed()
         item.runtest()
+    except NotImplementedError as nie:
+        if "NO_CUBLASLT" in str(nie):
+            pytest.skip("CUBLASLT not available")
+        raise
     except AssertionError as ae:
         if str(ae) == "Torch not compiled with CUDA enabled":
             pytest.skip("Torch not compiled with CUDA enabled")
@@ -29,19 +22,11 @@ def pytest_runtest_call(item):
         raise
 
 
-_teardown_counter = 0
-
-
 @pytest.hookimpl(trylast=True)
 def pytest_runtest_teardown(item, nextitem):
-    global _teardown_counter
-    _teardown_counter += 1
-    if _teardown_counter % 50 == 0 or nextitem is None:
-        gc.collect()
+    gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-    elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
-        torch.mps.empty_cache()
 
 
 @pytest.fixture(scope="session")

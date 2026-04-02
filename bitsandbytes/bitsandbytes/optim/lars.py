@@ -20,6 +20,7 @@ class LARS(Optimizer1State):
         optim_bits=32,
         args=None,
         min_8bit_size=4096,
+        percentile_clipping=100,
         max_unorm=0.02,
     ):
         """
@@ -44,6 +45,8 @@ class LARS(Optimizer1State):
                 An object with additional arguments.
             min_8bit_size (`int`, defaults to 4096):
                 The minimum number of elements of the parameter tensors for 8-bit optimization.
+            percentile_clipping (`int`, defaults to 100):
+                Adapts clipping threshold automatically by tracking the last 100 gradient norms and clipping the gradient at a certain percentile to improve stability.
             max_unorm (`float`, defaults to 0.02):
                 The maximum gradient norm.
         """
@@ -59,7 +62,9 @@ class LARS(Optimizer1State):
             optim_bits,
             args,
             min_8bit_size,
+            percentile_clipping,
             max_unorm=max_unorm,
+            block_wise=False,
         )
 
 
@@ -74,6 +79,7 @@ class LARS8bit(Optimizer1State):
         nesterov=False,
         args=None,
         min_8bit_size=4096,
+        percentile_clipping=100,
         max_unorm=0.02,
     ):
         """
@@ -96,6 +102,8 @@ class LARS8bit(Optimizer1State):
                 An object with additional arguments.
             min_8bit_size (`int`, defaults to 4096):
                 The minimum number of elements of the parameter tensors for 8-bit optimization.
+            percentile_clipping (`int`, defaults to 100):
+                Adapts clipping threshold automatically by tracking the last 100 gradient norms and clipping the gradient at a certain percentile to improve stability.
             max_unorm (`float`, defaults to 0.02):
                 The maximum gradient norm.
         """
@@ -111,7 +119,9 @@ class LARS8bit(Optimizer1State):
             8,
             args,
             min_8bit_size,
+            percentile_clipping,
             max_unorm=max_unorm,
+            block_wise=False,
         )
 
 
@@ -126,6 +136,7 @@ class LARS32bit(Optimizer1State):
         nesterov=False,
         args=None,
         min_8bit_size=4096,
+        percentile_clipping=100,
         max_unorm=0.02,
     ):
         """
@@ -148,6 +159,8 @@ class LARS32bit(Optimizer1State):
                 An object with additional arguments.
             min_8bit_size (`int`, defaults to 4096):
                 The minimum number of elements of the parameter tensors for 8-bit optimization.
+            percentile_clipping (`int`, defaults to 100):
+                Adapts clipping threshold automatically by tracking the last 100 gradient norms and clipping the gradient at a certain percentile to improve stability.
             max_unorm (`float`, defaults to 0.02):
                 The maximum gradient norm.
         """
@@ -163,7 +176,9 @@ class LARS32bit(Optimizer1State):
             32,
             args,
             min_8bit_size,
+            percentile_clipping,
             max_unorm=max_unorm,
+            block_wise=False,
         )
 
 
@@ -216,6 +231,9 @@ class PytorchLARS(Optimizer):
                 loss = closure()
 
         for group in self.param_groups:
+            params_with_grad = []
+            d_p_list = []
+            momentum_buffer_list = []
             weight_decay = group["weight_decay"]
             momentum = group["momentum"]
             dampening = group["dampening"]

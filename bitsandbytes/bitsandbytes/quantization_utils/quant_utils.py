@@ -18,7 +18,6 @@
 # along with ZeroQ repository.  If not, see <http://www.gnu.org/licenses/>.
 #*
 
-import numpy as np
 import torch
 from torch.autograd import Function
 

@@ -123,6 +123,7 @@ class QuantAct(Module):
                     quantization_min + 1e-8,
                     quantization_max,
                 )
+
         scale, zero_point = asymmetric_linear_quantization_params(
             self.activation_bit, quantization_min, quantization_max
         )
@@ -140,9 +141,6 @@ class QuantAct(Module):
             return quant_act.transpose(1, -1)
 
     def compute_DED(self, p_k, p_k1):
-        """
-        calcuate D(k, {k+1}) = -sum_ij p(x_{q,ij}^{(k)}, x_{q,ij}^{(k+1)}) log p(x_{q,ij}^{(k+1)} | x_{q,ij}^{(k)})
-        """
         p_k = F.normalize(p_k, p=1, dim=1)
         p_k1 = F.normalize(p_k1, p=1, dim=1)
 
@@ -196,7 +194,6 @@ class QuantAct(Module):
             last_layer_distribution = quant_act.abs()
             if not np.isnan(last_layer_entropy.item()):
                 llama_entropy.append(last_layer_entropy.item())
-
             return quant_act
         else:
             self._ensure_clip_range_buffers(inputs)
@@ -207,9 +204,6 @@ class QuantAct(Module):
             return quant_act
 
     def forward(self, x):
-        """
-        quantize given activation x
-        """
         inputs_calibrate = x.data
         if self._calibrate:
             if inputs_calibrate.shape[1] == 1:
@@ -283,7 +277,6 @@ class QuantAct(Module):
                     quant_act = self.quantization(x, self.llama_range_min, self.llama_range_max)
                     self.activation_range_min = self.llama_range_min
                     self.activation_range_max = self.llama_range_max
-
                 return quant_act
             else:
                 self._ensure_clip_range_buffers(inputs_calibrate)
