@@ -49,6 +49,7 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         self.visual_token_num = visual_token_num
         self.last_visual_token_num = None
+        self.last_original_visual_token_num = None
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -166,7 +167,7 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             )
         else:
             inputs_embeds = self.get_model().embed_tokens(inputs)
-            self.last_visual_token_num = 0
+            self._record_visual_token_stats([0], [0])
 
         outputs = super().generate(
             position_ids=position_ids,
@@ -174,6 +175,8 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             inputs_embeds=inputs_embeds,
             **kwargs
         )
+        if images is not None:
+            self.print_last_visual_token_stats()
         if return_visual_token_num:
             return outputs, self.last_visual_token_num
         return outputs

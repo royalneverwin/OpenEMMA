@@ -205,6 +205,21 @@ def compress_by_vit_attn_v3(
     return prune_mask
 
 
+def infer_visual_token_counts(image_features):
+    if isinstance(image_features, list):
+        return [int(feature.shape[0]) for feature in image_features]
+
+    if image_features.ndim == 3:
+        batch_size = int(image_features.shape[0])
+        token_num = int(image_features.shape[1])
+        return [token_num] * batch_size
+
+    if image_features.ndim == 2:
+        return [int(image_features.shape[0])]
+
+    raise ValueError(f"Unsupported image_features shape: {tuple(image_features.shape)}")
+
+
 class LlavaMetaForCausalLM(ABC):
 
     @abstractmethod
@@ -213,6 +228,60 @@ class LlavaMetaForCausalLM(ABC):
 
     def get_vision_tower(self):
         return self.get_model().get_vision_tower()
+
+    def _record_visual_token_stats(self, original_token_counts, final_token_counts):
+        original_token_counts = [int(count) for count in original_token_counts]
+        final_token_counts = [int(count) for count in final_token_counts]
+
+        setattr(self, "last_original_visual_token_counts", original_token_counts)
+        setattr(self, "last_visual_token_counts", final_token_counts)
+        setattr(
+            self,
+            "last_original_visual_token_num",
+            original_token_counts[0] if len(original_token_counts) == 1 else sum(original_token_counts),
+        )
+        setattr(
+            self,
+            "last_visual_token_num",
+            final_token_counts[0] if len(final_token_counts) == 1 else sum(final_token_counts),
+        )
+
+    def format_last_visual_token_stats(self):
+        original_token_counts = getattr(self, "last_original_visual_token_counts", None)
+        final_token_counts = getattr(self, "last_visual_token_counts", None)
+        if not original_token_counts or not final_token_counts:
+            return None
+
+        if len(original_token_counts) != len(final_token_counts):
+            return None
+
+        if len(original_token_counts) == 1:
+            original_count = original_token_counts[0]
+            final_count = final_token_counts[0]
+            pruned_count = original_count - final_count
+            keep_ratio = final_count / original_count if original_count > 0 else 1.0
+            return (
+                "[Visual tokens] "
+                f"pre_prune={original_count}, "
+                f"post_prune={final_count}, "
+                f"pruned={pruned_count}, "
+                f"keep_ratio={keep_ratio:.4f}"
+            )
+
+        per_sample_parts = []
+        for sample_idx, (original_count, final_count) in enumerate(zip(original_token_counts, final_token_counts)):
+            pruned_count = original_count - final_count
+            keep_ratio = final_count / original_count if original_count > 0 else 1.0
+            per_sample_parts.append(
+                f"sample{sample_idx}: {original_count}->{final_count} "
+                f"(pruned={pruned_count}, keep_ratio={keep_ratio:.4f})"
+            )
+        return "[Visual tokens] " + "; ".join(per_sample_parts)
+
+    def print_last_visual_token_stats(self):
+        message = self.format_last_visual_token_stats()
+        if message is not None:
+            print(message)
 
     def encode_images(
         self,
@@ -410,11 +479,12 @@ class LlavaMetaForCausalLM(ABC):
     ):
         vision_tower = self.get_vision_tower()
         if vision_tower is None or images is None:
-            setattr(self, "last_visual_token_num", 0)
+            self._record_visual_token_stats([0], [0])
             return input_ids, position_ids, attention_mask, past_key_values, None, labels
         if input_ids.shape[1] == 1:
             return input_ids, position_ids, attention_mask, past_key_values, None, labels
 
+        original_token_counts = None
         if getattr(self, "visual_token_num", None) is not None and texts is not None:
             if type(images) is list or images.ndim == 5:
                 if type(images) is list:
@@ -438,9 +508,11 @@ class LlavaMetaForCausalLM(ABC):
                 if mm_patch_merge_type == "flat":
                     image_features = [x.flatten(0, 1) for x in image_features]
                     index_masks = [x.flatten(0, 1) for x in index_masks]
+                    original_token_counts = [int(x.shape[0]) for x in image_features]
                     image_features = [x[m] for x, m in zip(image_features, index_masks)]
                 elif mm_patch_merge_type.startswith("spatial"):
                     new_image_features = []
+                    original_token_counts = []
                     for image_idx, (image_feature, index_mask) in enumerate(zip(image_features, index_masks)):
                         if image_feature.shape[0] > 1:
                             base_image_feature = image_feature[0]
@@ -482,12 +554,14 @@ class LlavaMetaForCausalLM(ABC):
                                     dim=-1,
                                 )
                                 index_mask = index_mask.flatten(1, 2).squeeze(0)
+                                original_token_count = int(base_image_feature.shape[0] + image_feature.shape[0])
                                 image_feature = image_feature[index_mask]
                             else:
                                 image_feature = image_feature.permute(0, 2, 1, 3, 4).contiguous()
                                 image_feature = image_feature.flatten(0, 3)
                                 index_mask = index_mask.permute(0, 2, 1, 3).contiguous()
                                 index_mask = index_mask.flatten(0, 3)
+                                original_token_count = int(base_image_feature.shape[0] + image_feature.shape[0])
                                 image_feature = image_feature[index_mask]
                             base_image_feature = base_image_feature[base_index_mask]
                             image_feature = torch.cat((base_image_feature, image_feature))
@@ -509,7 +583,9 @@ class LlavaMetaForCausalLM(ABC):
                                     ),
                                     dim=0,
                                 )
+                            original_token_count = int(image_feature.shape[0])
                             image_feature = image_feature[index_mask]
+                        original_token_counts.append(original_token_count)
                         new_image_features.append(image_feature)
                     image_features = new_image_features
                 else:
@@ -524,6 +600,7 @@ class LlavaMetaForCausalLM(ABC):
                     quant_method=quant_method,
                     pruning_method=pruning_method,
                 )
+                original_token_counts = [int(image_features.shape[1])]
                 image_features = image_features[index_masks].unsqueeze(0)
         else:
             if type(images) is list or images.ndim == 5:
@@ -587,11 +664,10 @@ class LlavaMetaForCausalLM(ABC):
             else:
                 image_features = self.encode_images(images)
 
-        if isinstance(image_features, list):
-            visual_token_num = image_features[0].shape[0] if image_features else 0
-        else:
-            visual_token_num = image_features.shape[1] if image_features.ndim > 2 else image_features.shape[0]
-        setattr(self, "last_visual_token_num", int(visual_token_num))
+        final_token_counts = infer_visual_token_counts(image_features)
+        if original_token_counts is None:
+            original_token_counts = final_token_counts
+        self._record_visual_token_stats(original_token_counts, final_token_counts)
 
         if getattr(self.config, "tune_mm_mlp_adapter", False) and getattr(self.config, "mm_use_im_start_end", False):
             raise NotImplementedError
